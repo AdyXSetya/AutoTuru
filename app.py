@@ -8,7 +8,7 @@ import re
 import os
 
 # Konfigurasi awal
-st.set_page_config(page_title="Shopee Live Bot", page_icon="🛒")
+st.set_page_config(page_title="Shopee Live Bot V2", page_icon="🛒")
 
 # File untuk menyimpan state
 STATE_FILE = 'bot_state.json'
