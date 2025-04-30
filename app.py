@@ -9,23 +9,24 @@ from datetime import datetime
 
 # Konfigurasi
 ACCOUNTS_URL = "https://raw.githubusercontent.com/AdyXSetya/AutoTuru/refs/heads/main/accounts.txt"
-LOG_FILE = "bot.log"  # File untuk menyimpan log
+LOG_FILE = "bot.log"
 CHECK_INTERVAL = 5
 ACCOUNT_REFRESH_INTERVAL = 300
 
 # Streamlit interface
-st.title("Shopee Live Bot v3")
+st.title("Shopee Live Bot v4")
 status_text = st.empty()
-log_container = st.container()
+log_container = st.empty()  # Container untuk log real-time
 stop_button = st.button("Stop Bot")
 
 # Variabel global
 accounts = []
 running = True
 last_account_refresh = 0
+log_entries = []  # Menyimpan log sementara untuk tampilan
 
 def log(message, username=None):
-    """Fungsi logging untuk Streamlit dan file"""
+    """Fungsi logging dengan update UI real-time"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_entry = f"[{timestamp}]"
     if username:
@@ -39,9 +40,14 @@ def log(message, username=None):
     except Exception as e:
         print(f"Error writing log: {str(e)}")
     
-    # Tampilkan di Streamlit
-    with log_container:
-        st.text(log_entry)
+    # Simpan ke buffer untuk UI
+    log_entries.append(log_entry)
+    if len(log_entries) > 100:  # Batasi jumlah log di memori
+        log_entries.pop(0)
+    
+    # Update UI
+    with log_container.container():
+        st.text('\n'.join(log_entries[-20:]))
 
 def load_accounts():
     """Ambil accounts.txt dari GitHub"""
