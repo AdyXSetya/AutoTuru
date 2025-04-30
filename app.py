@@ -46,7 +46,7 @@ def add_log(message):
     st.session_state.logs.append(log_entry)
     if len(st.session_state.logs) > 200:
         st.session_state.logs.pop(0)
-    save_state()  # Auto-save setiap log
+    save_state()
 
 # Fungsi load akun
 def load_accounts(uploaded_file):
@@ -75,7 +75,7 @@ def load_accounts(uploaded_file):
         add_log(f"Loaded {len(accounts)} akun")
     except Exception as e:
         add_log(f"Error loading accounts: {str(e)}")
-    save_state()  # Simpan setelah load akun
+    save_state()
     return accounts
 
 # Fungsi proses cookie
@@ -199,23 +199,92 @@ def detect_number(text):
     match = re.search(pattern, text)
     return int(match.group()) if match else None
 
-# Main loop dengan auto-save
+# Main loop
 def main_loop():
     while st.session_state.running:
         try:
             for account in st.session_state.accounts:
-                # Proses utama (tetap seperti sebelumnya)
-                # ...
+                add_log(f"Memproses akun: {account['username']}")
                 
+                # Cek session tiap 1 jam
+                if time.time() - account['last_session_check'] >= 3600:
+                    add_log("Memperbarui session ID")
+                    account['session_id'] = check_live(account['cookie'])
+                    if account['session_id']:
+                        account['chatroom_id'] = get_chatroom_id(account['session_id'], account['cookie'])
+                    else:
+                        account['chatroom_id'] = None
+                    account['last_session_check'] = time.time()
+                
+                # Cek etalase tiap 2 jam
+                if account['session_id'] and time.time() - account['last_etalase_check'] >= 7200:
+                    add_log("Memperbarui etalase")
+                    cookie_sakti = process_cookie(account['cookie'])
+                    account['etalase'] = check_etalase(account['session_id'], cookie_sakti)
+                    account['last_etalase_check'] = time.time()
+                
+                # Proses pesan
+                if account['chatroom_id']:
+                    add_log("Memproses pesan chat")
+                    messages = get_messages(account['chatroom_id'])
+                    for message in messages.get('data', {}).get('message', []):
+                        for msg in message.get('msgs', []):
+                            content = msg.get('content')
+                            if content:
+                                try:
+                                    content_data = json.loads(content)
+                                    text = content_data.get('content', '')
+                                    add_log(f"[{account['username']}] {msg['nickname']}: {text}")
+                                    
+                                    # Cek item_id dan shop_id
+                                    if 'shop_id' in content_data and 'item_id' in content_data:
+                                        result = show_produk(
+                                            content_data['item_id'],
+                                            content_data['shop_id'],
+                                            account['session_id'],
+                                            account['cookie']
+                                        )
+                                        add_log(f"AUTO SHOW: {result}")
+                                        account['last_show_time'] = time.time()
+                                    
+                                    # Cek nomor etalase
+                                    elif (num := detect_number(text)) is not None:
+                                        if 1 <= num <= 100 and num <= len(account['etalase']):
+                                            item = account['etalase'][num-1]
+                                            result = show_produk(
+                                                item['item_id'],
+                                                item['shop_id'],
+                                                account['session_id'],
+                                                account['cookie']
+                                            )
+                                            add_log(f"AUTO SHOW ETALASE #{num}: {item['name']} - {result}")
+                                            account['last_show_time'] = time.time()
+                                        else:
+                                            add_log(f"Nomor etalase invalid: {num}")
+                                except json.JSONDecodeError:
+                                    pass
+                
+                # Auto show random
+                if time.time() - account['last_show_time'] > 200 and account['etalase']:
+                    add_log("Melakukan auto show random")
+                    item = account['etalase'][0]
+                    result = show_produk(
+                        item['item_id'],
+                        item['shop_id'],
+                        account['session_id'],
+                        account['cookie']
+                    )
+                    add_log(f"AUTO RANDOM SHOW: {item['name']} - {result}")
+                    account['last_show_time'] = time.time()
+            
             save_state()  # Simpan state setiap iterasi
         except Exception as e:
             add_log(f"Critical error: {str(e)}")
-            save_state()  # Pastikan tetap simpan saat error
+            save_state()
         time.sleep(5)
 
 # Antarmuka Streamlit
 st.title("Shopee Live Bot")
-
 uploaded_file = st.sidebar.file_uploader("Upload accounts.txt", type="txt")
 start_button = st.sidebar.button("Start" if not st.session_state.running else "Restart")
 stop_button = st.sidebar.button("Stop")
@@ -231,10 +300,9 @@ if start_button and not st.session_state.running:
 
 if stop_button:
     st.session_state.running = False
-    save_state()  # Pastikan state tersimpan saat stop
+    save_state()
     add_log("Bot stopped")
 
-# Tampilan status dan log
 st.subheader("Account Status")
 for account in st.session_state.accounts:
     status = "Live" if account.get('session_id') else "Offline"
