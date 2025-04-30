@@ -9,11 +9,12 @@ from datetime import datetime
 
 # Konfigurasi
 ACCOUNTS_URL = "https://raw.githubusercontent.com/AdyXSetya/AutoTuru/refs/heads/main/accounts.txt"
-CHECK_INTERVAL = 5  # Detik antar cek
-ACCOUNT_REFRESH_INTERVAL = 300  # Refresh accounts.txt setiap 5 menit
+LOG_FILE = "bot.log"  # File untuk menyimpan log
+CHECK_INTERVAL = 5
+ACCOUNT_REFRESH_INTERVAL = 300
 
 # Streamlit interface
-st.title("Shopee Live Bot v2")
+st.title("Shopee Live Bot v3")
 status_text = st.empty()
 log_container = st.container()
 stop_button = st.button("Stop Bot")
@@ -22,6 +23,25 @@ stop_button = st.button("Stop Bot")
 accounts = []
 running = True
 last_account_refresh = 0
+
+def log(message, username=None):
+    """Fungsi logging untuk Streamlit dan file"""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = f"[{timestamp}]"
+    if username:
+        log_entry += f" [{username}]"
+    log_entry += f" {message}"
+    
+    # Simpan ke file
+    try:
+        with open(LOG_FILE, "a") as f:
+            f.write(log_entry + "\n")
+    except Exception as e:
+        print(f"Error writing log: {str(e)}")
+    
+    # Tampilkan di Streamlit
+    with log_container:
+        st.text(log_entry)
 
 def load_accounts():
     """Ambil accounts.txt dari GitHub"""
@@ -45,9 +65,10 @@ def load_accounts():
                         'last_session_check': 0,
                         'last_etalase_check': 0
                     })
+        log(f"Akun diperbarui ({len(accounts)} akun) dari GitHub", "SYSTEM")
         return accounts
     except Exception as e:
-        log(f"Gagal memuat akun: {str(e)}")
+        log(f"Gagal memuat akun: {str(e)}", "ERROR")
         return []
 
 def cookie_sakti(cookie):
@@ -204,69 +225,74 @@ def bot_loop():
     global accounts, last_account_refresh
     
     while running:
-        # Refresh accounts jika sudah waktunya
-        if time.time() - last_account_refresh > ACCOUNT_REFRESH_INTERVAL:
-            new_accounts = load_accounts()
-            if new_accounts:
-                accounts = new_accounts
-                last_account_refresh = time.time()
-                log(f"Akun diperbarui ({len(accounts)} akun)")
-        
-        for account in accounts:
-            try:
-                # Cek session
-                if time.time() - account['last_session_check'] > 3600:
-                    account['session_id'] = check_live(account['cookie'])
-                    if account['session_id']:
-                        account['chatroom_id'] = get_chatroom_id(
+        try:
+            # Refresh accounts jika sudah waktunya
+            if time.time() - last_account_refresh > ACCOUNT_REFRESH_INTERVAL:
+                new_accounts = load_accounts()
+                if new_accounts:
+                    accounts = new_accounts
+                    last_account_refresh = time.time()
+
+            for account in accounts:
+                try:
+                    # Cek session
+                    if time.time() - account['last_session_check'] > 3600:
+                        account['session_id'] = check_live(account['cookie'])
+                        if account['session_id']:
+                            account['chatroom_id'] = get_chatroom_id(
+                                account['session_id'],
+                                account['cookie']
+                            )
+                        else:
+                            account['chatroom_id'] = None
+                        account['last_session_check'] = time.time()
+                        log(f"Session diperbarui: {account['session_id']}", account['username'])
+
+                    # Cek etalase
+                    if account['session_id'] and time.time() - account['last_etalase_check'] > 7200:
+                        cookie = cookie_sakti(account['cookie'])
+                        etalase = check_etalase(account['session_id'], cookie)
+                        account['etalase'] = etalase or []
+                        account['last_etalase_check'] = time.time()
+                        log(f"Etalase diperbarui ({len(etalase)} items)", account['username'])
+
+                    # Proses chat
+                    if account['chatroom_id']:
+                        url = f"https://chatroom-live.shopee.co.id/api/v1/fetch/chatroom/{account['chatroom_id']}/message"
+                        headers = {
+                            'User-Agent': 'Android app Shopee appver=29552 app_type=1 Cronet/102.0.5005.61',
+                            'Cookie': 'SPC_U=-'
+                        }
+                        try:
+                            res = requests.get(url, headers=headers)
+                            messages = res.json().get('data', {}).get('message', [])
+                            for msg in messages:
+                                for sub_msg in msg.get('msgs', []):
+                                    log(f"{sub_msg['nickname']}: {sub_msg.get('content', '')}", account['username'])
+                                    process_message(account, sub_msg)
+                        except Exception as e:
+                            log(f"Chat error: {str(e)}", account['username'])
+
+                    # Auto show jika idle
+                    if time.time() - account['last_show'] > 200 and account['etalase']:
+                        item = random.choice(account['etalase'])
+                        result = show_produk(
+                            item['item_id'],
+                            item['shop_id'],
                             account['session_id'],
                             account['cookie']
                         )
-                    else:
-                        account['chatroom_id'] = None
-                    account['last_session_check'] = time.time()
-                
-                # Cek etalase
-                if account['session_id'] and time.time() - account['last_etalase_check'] > 7200:
-                    cookie = cookie_sakti(account['cookie'])
-                    etalase = check_etalase(account['session_id'], cookie)
-                    account['etalase'] = etalase or []
-                    account['last_etalase_check'] = time.time()
-                    log(f"{account['username']} ETALASE UPDATED ({len(etalase)} items)")
-                
-                # Proses chat
-                if account['chatroom_id']:
-                    url = f"https://chatroom-live.shopee.co.id/api/v1/fetch/chatroom/{account['chatroom_id']}/message"
-                    headers = {
-                        'User-Agent': 'Android app Shopee appver=29552 app_type=1 Cronet/102.0.5005.61',
-                        'Cookie': 'SPC_U=-'
-                    }
-                    try:
-                        res = requests.get(url, headers=headers)
-                        messages = res.json().get('data', {}).get('message', [])
-                        for msg in messages:
-                            for sub_msg in msg.get('msgs', []):
-                                log(f"[{account['username']}] {sub_msg['nickname']}: {sub_msg.get('content', '')}")
-                                process_message(account, sub_msg)
-                    except Exception as e:
-                        log(f"Chat error: {str(e)}")
-                
-                # Auto show jika idle
-                if time.time() - account['last_show'] > 200 and account['etalase']:
-                    item = random.choice(account['etalase'])
-                    result = show_produk(
-                        item['item_id'],
-                        item['shop_id'],
-                        account['session_id'],
-                        account['cookie']
-                    )
-                    log(f"[{account['username']}] AUTO SHOW #{item['no']}: {item['name']} - {result}")
-                    account['last_show'] = time.time()
+                        log(f"AUTO SHOW #{item['no']}: {item['name']} - {result}", account['username'])
+                        account['last_show'] = time.time()
+
+                except Exception as e:
+                    log(f"Error processing: {str(e)}", account['username'])
+
+            time.sleep(CHECK_INTERVAL)
             
-            except Exception as e:
-                log(f"Error processing {account['username']}: {str(e)}")
-        
-        time.sleep(CHECK_INTERVAL)
+        except Exception as e:
+            log(f"Critical error: {str(e)}", "SYSTEM")
+            time.sleep(10)
 
 # Jalankan bot di thread terpisah
 thread = threading.Thread(target=bot_loop)
@@ -275,4 +301,5 @@ thread.start()
 # Handler tombol stop
 if stop_button:
     running = False
+    log("Bot stopped by user", "SYSTEM")
     st.warning("Bot stopped")
