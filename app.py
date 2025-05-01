@@ -118,7 +118,6 @@ def check_etalase(session_id, cookie):
 
 # Ambil pesan
 def get_messages(chatroom_id):
-    debug_log("Worker thread: Mengambil pesan")
     url = f"https://chatroom-live.shopee.co.id/api/v1/fetch/chatroom/{chatroom_id}/message"
     headers = {
         "User-Agent": "Android app Shopee appver=29552 app_type=1 Cronet/102.0.5005.61"
@@ -141,7 +140,7 @@ def message_worker(chatroom_id):
             if not chatroom_id:
                 time.sleep(1)
                 continue
-
+            debug_log("Worker thread: Mengambil pesan")
             messages_data = get_messages(chatroom_id)
             
             if messages_data and messages_data.get('code') == 0:
