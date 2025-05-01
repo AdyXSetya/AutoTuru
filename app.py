@@ -4,20 +4,13 @@ import time
 import threading
 from datetime import datetime, timedelta
 import json
+from queue import Queue
 
-# Inisialisasi Session State (WAJIB DI AWAL)
-REQUIRED_KEYS = {
-    'chat_running': False,
-    'chat_messages': [],
-    'last_comments': [],
-    'etalase_data': [],
-    'chatroom_id': None
-}
+# Inisialisasi di luar session state (thread-safe)
+stop_event = threading.Event()
+message_queue = Queue()
 
-for key, default in REQUIRED_KEYS.items():
-    if key not in st.session_state:
-        st.session_state[key] = default
-
+# Fungsi CookieSakti (sudah benar)
 def cookie_sakti(input_cookie):
     cookie_patch = 'SPC_F=fdecd079d2e0d109_unknown; SPC_AFTID=134e5e24-814c-420a-8d2b-332f0bcc7fc2'
     
@@ -29,13 +22,12 @@ def cookie_sakti(input_cookie):
                 items[key.strip()] = value.strip()
         return items
 
-    # Gabungkan cookie input dan patch
     final_cookie = parse_cookie(input_cookie)
     patch_cookie = parse_cookie(cookie_patch)
-    final_cookie.update(patch_cookie)  # Timpa dengan nilai patch
-    
+    final_cookie.update(patch_cookie)
     return '; '.join([f"{k}={v}" for k, v in final_cookie.items()])
 
+# Fungsi untuk cek live (sudah benar)
 def check_live(cookie):
     now = datetime.now().strftime("%Y-%m-%d")
     url = f"https://creator.shopee.co.id/supply/api/lm/sellercenter/liveList/v2?page=1&pageSize=1000&name=&orderBy=&sort=&timeDim=30d&endDate={now}"
@@ -62,6 +54,7 @@ def check_live(cookie):
     except Exception as e:
         return {"status": f"Error: {str(e)}"}
 
+# Fungsi untuk mendapatkan chatroom ID (sudah benar)
 def get_chatroom_id(session_id, cookie):
     url = f"https://live.shopee.co.id/api/v1/session/{session_id}"
     headers = {
@@ -76,6 +69,20 @@ def get_chatroom_id(session_id, cookie):
     except:
         return None
 
+# Fungsi untuk mendapatkan pesan (sudah benar)
+def get_messages(chatroom_id):
+    url = f"https://chatroom-live.shopee.co.id/api/v1/fetch/chatroom/{chatroom_id}/message"
+    headers = {
+        "User-Agent": "Android app Shopee appver=29552 app_type=1 Cronet/102.0.5005.61"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers)
+        return response.json()
+    except:
+        return None
+
+# Fungsi untuk mendapatkan etalase (sudah benar)
 def check_etalase(session_id, cookie):
     url = f"https://live.shopee.co.id/api/v1/session/{session_id}/host/items?limit=100&offset=0"
     headers = {
@@ -102,40 +109,78 @@ def check_etalase(session_id, cookie):
     except:
         return None
 
-from queue import Queue
-
-message_queue = Queue()
-
-def process_messages():
-    while True:
-        if not st.session_state.chat_running:
-            break
-            
-        if st.session_state.chatroom_id:
-            messages_data = get_messages(st.session_state.chatroom_id)
-            
-            if messages_data and messages_data.get('code') == 0:
-                messages = messages_data.get('data', {}).get('message', [])
-                
-                for message_group in messages:
-                    for msg in message_group.get('msgs', []):
-                        nickname = msg.get('nickname', 'Unknown')
-                        content = msg.get('content', '')
+# Worker thread untuk ambil pesan
+def message_worker(chatroom_id):
+    while not stop_event.is_set():
+        messages_data = get_messages(chatroom_id)
+        if messages_data and messages_data.get('code') == 0:
+            for message_group in messages_data.get('data', {}).get('message', []):
+                for msg in message_group.get('msgs', []):
+                    nickname = msg.get('nickname', 'Unknown')
+                    content = msg.get('content', '')
+                    
+                    if content:
+                        try:
+                            content_data = json.loads(content).get('content', '')
+                        except:
+                            content_data = content
                         
-                        if content:
-                            try:
-                                content_data = json.loads(content).get('content', '')
-                            except:
-                                content_data = content
-                            
-                            message_queue.put({
-                                'nickname': nickname,
-                                'content': content_data,
-                                'time': datetime.now()
-                            })
+                        message_queue.put({
+                            'nickname': nickname,
+                            'content': content_data,
+                            'time': datetime.now()
+                        })
         time.sleep(2)
 
-def process_queue():
+# UI Streamlit
+st.title("Shopee Live Monitoring")
+
+# Inisialisasi session state di UI (wajib di dalam UI)
+if 'chat_messages' not in st.session_state:
+    st.session_state.chat_messages = []
+if 'last_comments' not in st.session_state:
+    st.session_state.last_comments = []
+if 'etalase_data' not in st.session_state:
+    st.session_state.etalase_data = []
+
+cookie_input = st.text_input("Masukkan Cookie Shopee Creator:")
+process_btn = st.button("Cek Status & Mulai Monitoring")
+
+if process_btn and cookie_input:
+    with st.spinner("Memproses..."):
+        processed_cookie = cookie_sakti(cookie_input.strip())
+        live_check = check_live(processed_cookie)
+        
+    if live_check.get("status") == "SEDANG LIVE":
+        session_id = live_check.get("session_id")
+        st.success(f"SEDANG LIVE - Session ID: {session_id}")
+        
+        # Ambil data etalase
+        etalase_data = check_etalase(session_id, processed_cookie)
+        if etalase_data:
+            st.session_state.etalase_data = etalase_data
+            st.write(f"Total Produk di Etalase: {len(etalase_data)}")
+            st.table(etalase_data)
+        else:
+            st.warning("Tidak ada data etalase")
+        
+        # Dapatkan chatroom ID
+        chatroom_id = get_chatroom_id(session_id, processed_cookie)
+        if chatroom_id:
+            stop_event.clear()
+            # Jalankan thread
+            threading.Thread(
+                target=message_worker,
+                args=(chatroom_id,),
+                daemon=True
+            ).start()
+        else:
+            st.error("Gagal mendapatkan chatroom ID")
+    else:
+        st.error(live_check.get("status"))
+
+# Pemrosesan queue di main thread
+if not stop_event.is_set():
     while not message_queue.empty():
         msg = message_queue.get()
         current_time = msg['time']
@@ -160,55 +205,14 @@ def process_queue():
                 'message': msg['content']
             })
 
-st.title("Shopee Live Monitoring")
-
-cookie_input = st.text_input("Masukkan Cookie Shopee Creator:")
-process_btn = st.button("Cek Status & Mulai Monitoring")
-
-if process_btn and cookie_input:
-    with st.spinner("Memproses..."):
-        processed_cookie = cookie_sakti(cookie_input.strip())
-        live_check = check_live(processed_cookie)
-        
-    if live_check.get("status") == "SEDANG LIVE":
-        session_id = live_check.get("session_id")
-        st.success(f"SEDANG LIVE - Session ID: {session_id}")
-        
-        # Dapatkan data etalase
-        etalase_data = check_etalase(session_id, processed_cookie)
-        if etalase_data:
-            st.session_state.etalase_data = etalase_data
-            st.write(f"Total Produk di Etalase: {len(etalase_data)}")
-            st.table(etalase_data)
-        else:
-            st.warning("Tidak ada data etalase")
-        
-        # Dapatkan chatroom ID
-        chatroom_id = get_chatroom_id(session_id, processed_cookie)
-        if chatroom_id:
-            st.session_state.chatroom_id = chatroom_id
-            st.session_state.chat_running = True
-            
-            # Jalankan thread
-            threading.Thread(
-                target=process_messages,
-                daemon=True
-            ).start()
-        else:
-            st.error("Gagal mendapatkan chatroom ID")
-    else:
-        st.error(live_check.get("status"))
-
 # Tampilkan pesan
-if st.session_state.chat_running:
-    process_queue()
+if st.session_state.chat_messages:
     st.header("Live Chat Messages")
     st.write(f"Total Pesan: {len(st.session_state.chat_messages)}")
     st.table(st.session_state.chat_messages)
 
 # Tombol stop
-if st.session_state.chat_running:
+if not stop_event.is_set():
     if st.button("Stop Monitoring"):
-        st.session_state.chat_running = False
-        st.session_state.chatroom_id = None
+        stop_event.set()
         st.experimental_rerun()
