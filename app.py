@@ -5,16 +5,18 @@ import threading
 from datetime import datetime, timedelta
 import json
 from queue import Queue
+import streamlit_autorefresh as st_autorefresh
 
 # Konfigurasi Awal
 stop_event = threading.Event()
 message_queue = Queue()
+debug_queue = Queue()
 DEBUG = True  # Aktifkan untuk debugging
 
 # Fungsi untuk debugging
 def debug_log(message):
     if DEBUG:
-        st.write(f"[DEBUG] {datetime.now()} - {message}")
+        debug_queue.put(f"[DEBUG] {datetime.now()} - {message}")
 
 # Fungsi CookieSakti
 def cookie_sakti(input_cookie):
@@ -119,7 +121,7 @@ def get_messages(chatroom_id):
         debug_log(f"Error get_messages: {str(e)}")
         return None
 
-# Worker thread untuk ambil pesan
+# Worker thread untuk ambil pesan (menggunakan debug_queue)
 def message_worker(chatroom_id):
     while not stop_event.is_set():
         if chatroom_id:
@@ -149,7 +151,7 @@ def message_worker(chatroom_id):
                             'time': datetime.now()
                         }
                         message_queue.put(message_info)
-        time.sleep(1.5)  # Kurangi jeda untuk respons lebih cepat
+        time.sleep(1.5)
 
 # UI Streamlit
 st.title("Shopee Live Monitoring")
@@ -161,6 +163,9 @@ if 'last_comments' not in st.session_state:
     st.session_state.last_comments = []
 if 'etalase_data' not in st.session_state:
     st.session_state.etalase_data = []
+
+# Autorefresh setiap 2 detik
+st_autorefresh.autorefresh(interval=2000, key="refresh")
 
 cookie_input = st.text_input("Masukkan Cookie Shopee Creator:")
 process_btn = st.button("Cek Status & Mulai Monitoring")
@@ -187,7 +192,6 @@ if process_btn and cookie_input:
         chatroom_id = get_chatroom_id(session_id, processed_cookie)
         if chatroom_id:
             stop_event.clear()
-            # Jalankan thread
             threading.Thread(
                 target=message_worker,
                 args=(chatroom_id,),
@@ -199,8 +203,9 @@ if process_btn and cookie_input:
     else:
         st.error(live_check.get("status"))
 
-# Pemrosesan queue di main thread
+# Pemrosesan antrian di main thread
 if not stop_event.is_set():
+    # Proses antrian pesan
     while not message_queue.empty():
         msg = message_queue.get()
         current_time = msg['time']
@@ -227,6 +232,15 @@ if not stop_event.is_set():
                 'user': msg['nickname'],
                 'message': msg['content']
             })
+    
+    # Proses antrian debug
+    while not debug_queue.empty():
+        debug_msg = debug_queue.get()
+        st.session_state.chat_messages.insert(0, {
+            'timestamp': datetime.now().strftime("%H:%M:%S"),
+            'user': 'DEBUG',
+            'message': debug_msg
+        })
 
 # Tampilkan pesan
 if st.session_state.chat_messages:
@@ -239,5 +253,7 @@ else:
 # Tombol stop
 if not stop_event.is_set():
     if st.button("Stop Monitoring"):
+        stop_event.set()
+        st.experimental_rerun()
         stop_event.set()
         st.experimental_rerun()
