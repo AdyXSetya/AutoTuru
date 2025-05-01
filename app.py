@@ -42,7 +42,7 @@ def check_live_and_etalase(cookie):
         session_id = live_data["data"]["list"][0].get("sessionId")
         live_status = live_data["data"]["list"][0].get("status")
         
-        if live_status != "1":
+        if live_status != 1:
             return {"status": "TIDAK LIVE", "etalase": None}
             
         # Request data etalase
