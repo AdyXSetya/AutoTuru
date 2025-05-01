@@ -4,11 +4,11 @@ import time
 import threading
 from datetime import datetime, timedelta
 import json
-from queue import Queue
+from queue import Queue, Empty
 
 # Inisialisasi session state di awal
-if 'stop_event' not in st.session_state:
-    st.session_state.stop_event = threading.Event()
+if 'thread_lock' not in st.session_state:
+    st.session_state.thread_lock = threading.Lock()
     
 if 'message_queue' not in st.session_state:
     st.session_state.message_queue = Queue()
@@ -18,9 +18,6 @@ if 'chat_messages' not in st.session_state:
     
 if 'last_comments' not in st.session_state:
     st.session_state.last_comments = []
-    
-if 'etalase_data' not in st.session_state:
-    st.session_state.etalase_data = []
     
 if 'monitoring_active' not in st.session_state:
     st.session_state.monitoring_active = False
@@ -140,43 +137,51 @@ def get_messages(chatroom_id):
 
 # Worker thread untuk ambil pesan (100% thread-safe)
 def message_worker(chatroom_id):
-    while not st.session_state.stop_event.is_set():
-        if chatroom_id:
-            try:
-                messages_data = get_messages(chatroom_id)
-                
-                if messages_data and messages_data.get('code') == 0:
-                    messages = messages_data.get('data', {}).get('message', [])
+    with st.session_state.thread_lock:
+        while st.session_state.monitoring_active:
+            if chatroom_id:
+                try:
+                    url = f"https://chatroom-live.shopee.co.id/api/v1/fetch/chatroom/{chatroom_id}/message"
+                    headers = {
+                        "User-Agent": "Android app Shopee appver=29552 app_type=1 Cronet/102.0.5005.61"
+                    }
+                    response = requests.get(url, headers=headers)
+                    messages_data = response.json()
                     
-                    for message_group in messages:
-                        for msg in message_group.get('msgs', []):
-                            nickname = msg.get('nickname', 'Unknown')
-                            content = msg.get('content', '')
-                            
-                            # Parsing konten khusus
-                            if content.startswith('{'):
-                                try:
-                                    content_data = json.loads(content).get('content', '')
-                                except:
+                    if messages_data.get('code') == 0:
+                        messages = messages_data.get('data', {}).get('message', [])
+                        for message_group in messages:
+                            for msg in message_group.get('msgs', []):
+                                nickname = msg.get('nickname', 'Unknown')
+                                content = msg.get('content', '')
+                                
+                                # Parsing konten khusus
+                                if content.startswith('{'):
+                                    try:
+                                        content_data = json.loads(content).get('content', '')
+                                    except:
+                                        content_data = content
+                                else:
                                     content_data = content
-                            else:
-                                content_data = content
-                            
-                            st.session_state.message_queue.put({
-                                'type': 'chat',
-                                'nickname': nickname,
-                                'content': content_data,
-                                'time': datetime.now()
-                            })
-                time.sleep(1.5)
-            except Exception as e:
-                debug_log(f"Error message_worker: {str(e)}")
-                time.sleep(5)
+                                
+                                st.session_state.message_queue.put({
+                                    'type': 'chat',
+                                    'nickname': nickname,
+                                    'content': content_data,
+                                    'time': datetime.now()
+                                })
+                    time.sleep(1.5)
+                except Exception as e:
+                    debug_log(f"Error message_worker: {str(e)}")
+                    time.sleep(5)
 
-# Fungsi pemrosesan antrian (harus didefinisikan sebelum digunakan)
+# Fungsi pemrosesan antrian
 def process_queue():
-    while not st.session_state.message_queue.empty():
-        msg = st.session_state.message_queue.get()
+    while True:
+        try:
+            msg = st.session_state.message_queue.get_nowait()
+        except Empty:
+            break
         
         if msg['type'] == 'debug':
             st.session_state.chat_messages.insert(0, {
@@ -238,8 +243,8 @@ if process_btn and cookie_input and not st.session_state.monitoring_active:
         # Dapatkan chatroom ID
         chatroom_id = get_chatroom_id(session_id, processed_cookie)
         if chatroom_id:
-            # Reset stop event
-            st.session_state.stop_event.clear()
+            # Reset state
+            st.session_state.monitoring_active = True
             
             # Inisialisasi thread baru
             thread = threading.Thread(
@@ -248,7 +253,6 @@ if process_btn and cookie_input and not st.session_state.monitoring_active:
                 daemon=True
             )
             st.session_state.thread = thread
-            st.session_state.monitoring_active = True
             thread.start()
             st.info("Monitoring dimulai...")
         else:
@@ -270,6 +274,5 @@ else:
 # Tombol stop
 if st.session_state.monitoring_active:
     if st.button("Stop Monitoring"):
-        st.session_state.stop_event.set()
         st.session_state.monitoring_active = False
         st.experimental_rerun()
