@@ -5,18 +5,19 @@ import threading
 from datetime import datetime, timedelta
 import json
 from queue import Queue
-import streamlit_autorefresh as st_autorefresh
 
 # Konfigurasi Awal
 stop_event = threading.Event()
 message_queue = Queue()
-debug_queue = Queue()
-DEBUG = True  # Aktifkan untuk debugging
+DEBUG = True
 
 # Fungsi untuk debugging
 def debug_log(message):
     if DEBUG:
-        debug_queue.put(f"[DEBUG] {datetime.now()} - {message}")
+        message_queue.put({
+            'type': 'debug',
+            'message': f"[DEBUG] {datetime.now()} - {message}"
+        })
 
 # Fungsi CookieSakti
 def cookie_sakti(input_cookie):
@@ -121,7 +122,7 @@ def get_messages(chatroom_id):
         debug_log(f"Error get_messages: {str(e)}")
         return None
 
-# Worker thread untuk ambil pesan (menggunakan debug_queue)
+# Worker thread untuk ambil pesan
 def message_worker(chatroom_id):
     while not stop_event.is_set():
         if chatroom_id:
@@ -146,6 +147,7 @@ def message_worker(chatroom_id):
                         
                         # Format pesan
                         message_info = {
+                            'type': 'chat',
                             'nickname': nickname,
                             'content': content_data,
                             'time': datetime.now()
@@ -164,9 +166,44 @@ if 'last_comments' not in st.session_state:
 if 'etalase_data' not in st.session_state:
     st.session_state.etalase_data = []
 
-# Autorefresh setiap 2 detik
-st_autorefresh.autorefresh(interval=2000, key="refresh")
+# Pemrosesan antrian
+def process_queue():
+    while not message_queue.empty():
+        msg = message_queue.get()
+        
+        if msg['type'] == 'debug':
+            st.session_state.chat_messages.insert(0, {
+                'timestamp': datetime.now().strftime("%H:%M:%S"),
+                'user': 'SYSTEM',
+                'message': msg['message']
+            })
+        elif msg['type'] == 'chat':
+            current_time = msg['time']
+            
+            # Hapus komentar yang lebih dari 30 detik
+            st.session_state.last_comments = [
+                c for c in st.session_state.last_comments 
+                if current_time - c['time'] <= timedelta(seconds=30)
+            ]
+            
+            # Cek duplikat dengan toleransi 5 detik
+            is_duplicate = False
+            for comment in st.session_state.last_comments:
+                if (comment['nickname'] == msg['nickname'] and 
+                    comment['content'] == msg['content'] and
+                    (current_time - comment['time']).total_seconds() < 5):
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                st.session_state.last_comments.append(msg)
+                st.session_state.chat_messages.insert(0, {
+                    'timestamp': current_time.strftime("%H:%M:%S"),
+                    'user': msg['nickname'],
+                    'message': msg['content']
+                })
 
+# Input dan tombol
 cookie_input = st.text_input("Masukkan Cookie Shopee Creator:")
 process_btn = st.button("Cek Status & Mulai Monitoring")
 
@@ -203,44 +240,8 @@ if process_btn and cookie_input:
     else:
         st.error(live_check.get("status"))
 
-# Pemrosesan antrian di main thread
-if not stop_event.is_set():
-    # Proses antrian pesan
-    while not message_queue.empty():
-        msg = message_queue.get()
-        current_time = msg['time']
-        
-        # Hapus komentar yang lebih dari 30 detik
-        st.session_state.last_comments = [
-            c for c in st.session_state.last_comments 
-            if current_time - c['time'] <= timedelta(seconds=30)
-        ]
-        
-        # Cek duplikat dengan toleransi 5 detik
-        is_duplicate = False
-        for comment in st.session_state.last_comments:
-            if (comment['nickname'] == msg['nickname'] and 
-                comment['content'] == msg['content'] and
-                (current_time - comment['time']).total_seconds() < 5):
-                is_duplicate = True
-                break
-        
-        if not is_duplicate:
-            st.session_state.last_comments.append(msg)
-            st.session_state.chat_messages.insert(0, {
-                'timestamp': current_time.strftime("%H:%M:%S"),
-                'user': msg['nickname'],
-                'message': msg['content']
-            })
-    
-    # Proses antrian debug
-    while not debug_queue.empty():
-        debug_msg = debug_queue.get()
-        st.session_state.chat_messages.insert(0, {
-            'timestamp': datetime.now().strftime("%H:%M:%S"),
-            'user': 'DEBUG',
-            'message': debug_msg
-        })
+# Proses antrian setiap 2 detik
+process_queue()
 
 # Tampilkan pesan
 if st.session_state.chat_messages:
@@ -253,7 +254,5 @@ else:
 # Tombol stop
 if not stop_event.is_set():
     if st.button("Stop Monitoring"):
-        stop_event.set()
-        st.experimental_rerun()
         stop_event.set()
         st.experimental_rerun()
