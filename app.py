@@ -235,6 +235,10 @@ if process_btn and cookie_input and not monitoring_active.is_set():
         # Dapatkan chatroom ID
         chatroom_id = get_chatroom_id(session_id, processed_cookie)
         if chatroom_id:
+            # Tampilkan chatroom ID di UI
+            st.success(f"Chatroom ID: {chatroom_id}")
+            st.info("Monitoring dimulai...")
+            
             # Aktifkan monitoring
             monitoring_active.set()
             
@@ -245,7 +249,6 @@ if process_btn and cookie_input and not monitoring_active.is_set():
                 daemon=True
             )
             thread.start()
-            st.info("Monitoring dimulai...")
         else:
             st.error("Gagal mendapatkan chatroom ID")
     else:
