@@ -14,10 +14,20 @@ def cookie_sakti(input_cookie):
                 items[key.strip()] = value.strip()
         return items
 
-    final_cookie = parse_cookie(cookie_patch)
+    # Parsing cookie
+    patch_cookies = parse_cookie(cookie_patch)
     input_cookies = parse_cookie(input_cookie)
-    final_cookie.update(input_cookies)
     
+    # Gabungkan dengan prioritas patch terlebih dahulu
+    final_cookie = {}
+    # Tambahkan cookie dari input terlebih dahulu
+    for key, value in input_cookies.items():
+        final_cookie[key] = value
+    # Timpa dengan cookie patch (agar patch punya prioritas lebih tinggi)
+    for key, value in patch_cookies.items():
+        final_cookie[key] = value
+
+    # Format kembali ke string
     return '; '.join([f"{k}={v}" for k, v in final_cookie.items()])
 
 # Fungsi Check Live + Etalase
