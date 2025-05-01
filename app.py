@@ -16,7 +16,7 @@ ACCOUNT_REFRESH_INTERVAL = 300
 
 # Inisialisasi Streamlit
 st.set_page_config(page_title="Shopee Live Bot", page_icon="🤖")
-st.title("Shopee Live Bot v6")
+st.title("Shopee Live Bot v7")
 status_text = st.empty()
 log_container = st.empty()
 stop_button = st.button("Stop Bot")
@@ -26,12 +26,13 @@ accounts = []
 running = True
 last_account_refresh = 0
 
-# Session state untuk log
+# Inisialisasi session state dengan thread-safe
 if 'logs' not in st.session_state:
     st.session_state.logs = deque(maxlen=200)
+log_lock = threading.Lock()
 
 def log(message, username=None):
-    """Fungsi logging dengan format: [waktu] [username] pesan"""
+    """Fungsi logging yang aman untuk thread"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_entry = f"[{timestamp}]"
     if username:
@@ -45,8 +46,9 @@ def log(message, username=None):
     except Exception as e:
         print(f"Error writing log: {str(e)}")
     
-    # Simpan ke session state
-    st.session_state.logs.append(log_entry)
+    # Simpan ke session state dengan thread safety
+    with log_lock:
+        st.session_state.logs.append(log_entry)
 
 def load_accounts():
     """Ambil accounts.txt dari GitHub"""
@@ -265,7 +267,7 @@ def bot_loop():
                         url = f"https://chatroom-live.shopee.co.id/api/v1/fetch/chatroom/{account['chatroom_id']}/message"
                         headers = {
                             'User-Agent': 'Android app Shopee appver=29552 app_type=1 Cronet/102.0.5005.61',
-                            'Cookie': 'SPC_U=-'
+                            'Cookie': 'AC_CERT_D=U2FsdGVkX1+UjZ0kttfkY9XG2BE2mX0s99kii5W9wZzdr8ZlexScqt0F17ZPjGud+nFw3J/P+o6kJ3XYhTXzSkCKzLML+rfyQJev0QwOfz4QxwWK83TcArOBXzdlurBNu1FPm2qpAHcjbdgJNJRwbRpqEcFxkOG4oUPOCodVQLf1/gfmOmifZ4Uh07wYQUIhuIfxHIAP+GSI/cYFhl/xjwqIc82BAPcHDMZw6oaKTs271YZGP4/y6l/idrais5DuqJ/O4svFAZYCGWmi576M3QH7Xmfo6yeY5TPrxYvoH1m6TshoSeQh6/Vh5cobpc0uP/Cmx5yG/6EVY4b3NLUKzQIdU9/Ai6l+duKULPdIf9UXUjv2oVEgf2/3p8a0tq8nI58h4j00BmE/LIBDPbWwO1UYj0iCjkwAxZh1Wgq2dljHMu6w5gYK5M9DeH4oPOEmxs8sXy0SpP+nEsw46xf8xErzGuqiKh1YUgQsGgkfqkZMts5JFu6QSBuRYzn5ZpfJ0g+hF8ZNGPRnkF4ud+oM1AKl/08q76zcBUTVjpr49gmznBfCNTfnudjDR9zp2CESYByzvIt12VuPd2W3rbXkOnXHIUOZ0jgKTsZywgjWFqqh31sSKOTG9/cdkPD1tSrBW6j0isbPTtMVTOXBag9sErR5a1oJfEAT1bHz75v0XCg3Ui9jWQERliNjCxES8PiBfRV6rPQr5JpxOjwdx4G9zFFXaj5pORoyKC0qtOJETtbeFMJLg1xw3900od65tLJBgILFfvP4WVlc+6BBKXGtGx3sr+BcFLs3gECCYn2VhchbzLN5kY6OLRXjsV6rDx/wMB/ZWb5l2M2CCjaoYbNbkXKo0rcbm7bGLnwSWsWgxcfd98pnoCY3bwvHwKHQNMbzi+F/Gs0MoDRWTU4eM5EysH5TSms6/DjxqEr7OJT3wQoFQifJ+Yy4ifzzJrThnG8Bn6NkVVm3GsJvGZD1DBzbn2MikszXXHE50yZoAHbvK19vOt3GuOzCVFwfBUcCs1wjp3gOk6hbzwUePX15cLfVwOGJPpbFrkhbDuEu9p6x+0Qu1e2kVt77w1vb0dyiB+WZtkaMw0s0ryLzYokeDHl9hQ==; userid=0; language=id; shopee_token=null; username=null; UA=Shopee%20Android%20Beeshop%20locale%2Fid%20version%3D715%20appver%3D29552; shopee_token=null; shopee_app_version=29552; SPC_SI=l28HaAAAAAB1a1labnFVWh8nHAAAAAAAR2ZURTZMeFk=; SPC_CLIENTID=QIzdI9wlYOJ3j0nWgjnlvtweoecpxkht; SPC_U=-; SPC_EC=-; SPC_SEC_SI=v1-clhiY0E3VjJEZVI1UGhBbCpd6V3EVBQwDUvbP7Mes6QTwtNT1S8+p141WtNm2XXc7lHE4bZLGt85O61wAVaxAjtjqLncNuf9ebBQG1/a//4=; SPC_AFTID=134e5e24-814c-420a-8d2b-332f0bcc7fc2; SPC_R_T_IV=emcwalVSR1pGUGhXQWdFSA==; SPC_T_ID=tCpjDGKCO2W4PY+rgc5HJ8k2VkcegpeAErfNE0BrCrAPpRF8ekHEf6CgQnz7KOhDjTynAxi3OZv1mSonaWNGrUFJGcKUokMq+SBTSPBcPiC6H+b4SqmC0JcnOkO5WRwpfGTiYo9ZLLwYqQpUoI3uApD0rCwekEbXYth0MaWcDyE=; SPC_R_T_ID=tCpjDGKCO2W4PY+rgc5HJ8k2VkcegpeAErfNE0BrCrAPpRF8ekHEf6CgQnz7KOhDjTynAxi3OZv1mSonaWNGrUFJGcKUokMq+SBTSPBcPiC6H+b4SqmC0JcnOkO5WRwpfGTiYo9ZLLwYqQpUoI3uApD0rCwekEbXYth0MaWcDyE=; REC_T_ID=847efb3a-210f-11f0-8be5-8eda1ff0b17a; SPC_T_IV=emcwalVSR1pGUGhXQWdFSA==; language=id; SPC_RNBV=5060005; SPC_DID=QIzdI9wlYOJ3j0nWKf1Md0YiBVu18dYRcSk0nsmt110=; SPC_F=fdecd079d2e0d109_unknown; SPC_F=fdecd079d2e0d109_unknown; csrftoken=1fbUbQ4dZaivBwegGRucv3Kg1YlYYIPd; shopee_rn_version=1667373194; SPC_EC=-; SPC_R_T_ID=tCpjDGKCO2W4PY+rgc5HJ8k2VkcegpeAErfNE0BrCrAPpRF8ekHEf6CgQnz7KOhDjTynAxi3OZv1mSonaWNGrUFJGcKUokMq+SBTSPBcPiC6H+b4SqmC0JcnOkO5WRwpfGTiYo9ZLLwYqQpUoI3uApD0rCwekEbXYth0MaWcDyE=; SPC_R_T_IV=emcwalVSR1pGUGhXQWdFSA==; SPC_SI=l28HaAAAAAB1a1labnFVWh8nHAAAAAAAR2ZURTZMeFk=; SPC_T_ID=tCpjDGKCO2W4PY+rgc5HJ8k2VkcegpeAErfNE0BrCrAPpRF8ekHEf6CgQnz7KOhDjTynAxi3OZv1mSonaWNGrUFJGcKUokMq+SBTSPBcPiC6H+b4SqmC0JcnOkO5WRwpfGTiYo9ZLLwYqQpUoI3uApD0rCwekEbXYth0MaWcDyE=; SPC_T_IV=emcwalVSR1pGUGhXQWdFSA==; SPC_U=-'
                         }
                         try:
                             res = requests.get(url, headers=headers)
@@ -302,10 +304,12 @@ def bot_loop():
 thread = threading.Thread(target=bot_loop)
 thread.start()
 
-# Tampilkan log real-time
+# Tampilkan log real-time dengan thread safety
 while running:
+    with log_lock:
+        logs = list(st.session_state.logs)
     with log_container:
-        st.text('\n'.join(st.session_state.logs))
+        st.text('\n'.join(logs))
     time.sleep(1)
 
 # Handler tombol stop
