@@ -6,10 +6,10 @@ from datetime import datetime, timedelta
 import json
 from queue import Queue, Empty
 
+# Inisialisasi lock sebagai variabel global (bukan di session state)
+thread_lock = threading.Lock()
+
 # Inisialisasi session state di awal
-if 'thread_lock' not in st.session_state:
-    st.session_state.thread_lock = threading.Lock()
-    
 if 'message_queue' not in st.session_state:
     st.session_state.message_queue = Queue()
     
@@ -137,8 +137,10 @@ def get_messages(chatroom_id):
 
 # Worker thread untuk ambil pesan (100% thread-safe)
 def message_worker(chatroom_id):
-    with st.session_state.thread_lock:
-        while st.session_state.monitoring_active:
+    global thread_lock  # Gunakan lock global
+    
+    while st.session_state.monitoring_active:
+        with thread_lock:  # Gunakan lock untuk thread safety
             if chatroom_id:
                 try:
                     url = f"https://chatroom-live.shopee.co.id/api/v1/fetch/chatroom/{chatroom_id}/message"
