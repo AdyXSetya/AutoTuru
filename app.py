@@ -6,25 +6,23 @@ from datetime import datetime, timedelta
 import json
 from queue import Queue, Empty
 
-# Inisialisasi session state
-if 'message_queue' not in st.session_state:
-    st.session_state.message_queue = Queue()
-if 'monitoring_active' not in st.session_state:
-    st.session_state.monitoring_active = threading.Event()
-if 'chat_messages' not in st.session_state:
-    st.session_state.chat_messages = []
-if 'last_comments' not in st.session_state:
-    st.session_state.last_comments = []
-if 'etalase_data' not in st.session_state:
-    st.session_state.etalase_data = []
-if 'monitoring_thread' not in st.session_state:
-    st.session_state.monitoring_thread = None
+# Inisialisasi session state sekali di awal
+if 'monitoring_params' not in st.session_state:
+    st.session_state.monitoring_params = {
+        'message_queue': Queue(),
+        'monitoring_active': threading.Event(),
+        'chat_messages': [],
+        'last_comments': [],
+        'etalase_data': [],
+        'monitoring_thread': None
+    }
 
 DEBUG = True
 
-def debug_log(message):
+# Fungsi debug yang thread-safe
+def debug_log(message, message_queue):
     if DEBUG:
-        st.session_state.message_queue.put({
+        message_queue.put({
             'type': 'debug',
             'message': f"[DEBUG] {datetime.now()} - {message}"
         })
@@ -128,127 +126,152 @@ def get_messages(chatroom_id):
         debug_log(f"Error get_messages: {str(e)}")
         return None
 
-def message_worker(chatroom_id):
-    while st.session_state.monitoring_active.is_set():
+# Fungsi worker yang BENAR-BENAR terpisah dari Streamlit
+def message_worker(chatroom_id, active_flag, msg_queue):
+    while active_flag.is_set():
         try:
-            if chatroom_id:
-                messages_data = get_messages(chatroom_id)
-                
-                if messages_data and messages_data.get('code') == 0:
-                    messages = messages_data.get('data', {}).get('messages', [])
-                    for msg in messages:
-                        nickname = msg.get('sender', {}).get('nickname', 'Unknown')
-                        content = msg.get('content', '')
-                        
-                        if content.startswith('{'):
-                            try:
-                                content_data = json.loads(content).get('content', '')
-                            except:
-                                content_data = content
-                        else:
-                            content_data = content
-                        
-                        st.session_state.message_queue.put({
-                            'type': 'chat',
-                            'nickname': nickname,
-                            'content': content_data,
-                            'time': datetime.now()
-                        })
-                time.sleep(2)
+            if not chatroom_id:
+                time.sleep(1)
+                continue
+
+            # Logika ambil pesan
+            url = f"https://chatroom-live.shopee.co.id/api/v1/fetch/chatroom/{chatroom_id}/message"
+            headers = {"User-Agent": "Android app Shopee appver=29552 app_type=1 Cronet/102.0.5005.61"}
+            
+            response = requests.get(url, headers=headers, timeout=10)
+            data = response.json()
+
+            if data.get('code') == 0:
+                for msg in data.get('data', {}).get('messages', []):
+                    nickname = msg.get('sender', {}).get('nickname', 'Unknown')
+                    content = msg.get('content', '')
+                    
+                    # Parsing konten khusus
+                    if content.startswith('{'):
+                        try:
+                            content = json.loads(content).get('content', '')
+                        except:
+                            pass
+                    
+                    msg_queue.put({
+                        'type': 'chat',
+                        'nickname': nickname,
+                        'content': content,
+                        'time': datetime.now()
+                    })
+            
+            time.sleep(2)
+            
         except Exception as e:
-            debug_log(f"Error message_worker: {str(e)}")
+            debug_log(f"Error worker: {str(e)}", msg_queue)
             time.sleep(5)
 
-def process_queue():
-    current_time = datetime.now()
-    
-    while True:
-        try:
-            msg = st.session_state.message_queue.get_nowait()
-        except Empty:
-            break
-        
-        if msg['type'] == 'debug':
-            st.session_state.chat_messages.insert(0, {
-                'timestamp': current_time.strftime("%H:%M:%S"),
-                'user': 'SYSTEM',
-                'message': msg['message']
-            })
-        elif msg['type'] == 'chat':
-            st.session_state.last_comments = [
-                c for c in st.session_state.last_comments 
-                if current_time - c['time'] <= timedelta(seconds=30)
-            ]
-            
-            is_duplicate = False
-            for comment in st.session_state.last_comments:
-                if (comment['nickname'] == msg['nickname'] and 
-                    comment['content'] == msg['content'] and
-                    (current_time - comment['time']).total_seconds() < 5):
-                    is_duplicate = True
-                    break
-            
-            if not is_duplicate:
-                st.session_state.last_comments.append(msg)
-                st.session_state.chat_messages.insert(0, {
-                    'timestamp': msg['time'].strftime("%H:%M:%S"),
-                    'user': msg['nickname'],
-                    'message': msg['content']
-                })
-
+# Setup UI
 st.title("Shopee Live Monitoring")
 
 cookie_input = st.text_input("Masukkan Cookie Shopee Creator:")
 process_btn = st.button("Cek Status & Mulai Monitoring")
 
-if process_btn and cookie_input and not st.session_state.monitoring_active.is_set():
-    with st.spinner("Memproses..."):
+if process_btn and cookie_input:
+    # Reset state jika sudah ada monitoring
+    if st.session_state.monitoring_params['monitoring_active'].is_set():
+        st.warning("Monitoring sudah berjalan!")
+    else:
+        # Proses cookie dan cek live
         processed_cookie = cookie_sakti(cookie_input.strip())
         live_check = check_live(processed_cookie)
         
-    if live_check.get("status") == "SEDANG LIVE":
-        session_id = live_check.get("session_id")
-        st.success(f"SEDANG LIVE - Session ID: {session_id}")
-        
-        st.session_state.etalase_data = check_etalase(session_id, processed_cookie)
-        if st.session_state.etalase_data:
-            st.write(f"Total Produk di Etalase: {len(st.session_state.etalase_data)}")
-            st.table(st.session_state.etalase_data)
-        else:
-            st.warning("Tidak ada data etalase")
-        
-        chatroom_id = get_chatroom_id(session_id, processed_cookie)
-        if chatroom_id:
-            st.success(f"Chatroom ID: {chatroom_id}")
-            st.info("Monitoring dimulai...")
+        if live_check.get("status") == "SEDANG LIVE":
+            session_id = live_check.get("session_id")
+            st.success(f"SEDANG LIVE - Session ID: {session_id}")
             
-            st.session_state.monitoring_active.set()
+            # Ambil data etalase
+            etalase_data = check_etalase(session_id, processed_cookie)
+            if etalase_data:
+                st.session_state.monitoring_params['etalase_data'] = etalase_data
+                st.write(f"Total Produk di Etalase: {len(etalase_data)}")
+                st.table(etalase_data)
+            else:
+                st.warning("Tidak ada data etalase")
             
-            if st.session_state.monitoring_thread is None or not st.session_state.monitoring_thread.is_alive():
-                st.session_state.monitoring_thread = threading.Thread(
+            # Dapatkan chatroom ID
+            chatroom_id = get_chatroom_id(session_id, processed_cookie)
+            if chatroom_id:
+                st.success(f"Chatroom ID: {chatroom_id}")
+                
+                # Aktifkan monitoring
+                st.session_state.monitoring_params['monitoring_active'].set()
+                
+                # Jalankan thread
+                thread = threading.Thread(
                     target=message_worker,
-                    args=(chatroom_id,),
+                    args=(chatroom_id,
+                          st.session_state.monitoring_params['monitoring_active'],
+                          st.session_state.monitoring_params['message_queue']),
                     daemon=True
                 )
-                st.session_state.monitoring_thread.start()
+                thread.start()
+                st.session_state.monitoring_params['monitoring_thread'] = thread
+                st.info("Monitoring dimulai...")
+            else:
+                st.error("Gagal mendapatkan chatroom ID")
         else:
-            st.error("Gagal mendapatkan chatroom ID")
-    else:
-        st.error(live_check.get("status"))
+            st.error(live_check.get("status"))
 
-process_queue()
+# Proses antrian pesan di main thread
+def process_messages():
+    current_time = datetime.now()
+    queue = st.session_state.monitoring_params['message_queue']
+    
+    while True:
+        try:
+            msg = queue.get_nowait()
+            if msg['type'] == 'debug':
+                st.session_state.monitoring_params['chat_messages'].insert(0, {
+                    'timestamp': current_time.strftime("%H:%M:%S"),
+                    'user': 'SYSTEM',
+                    'message': msg['message']
+                })
+            elif msg['type'] == 'chat':
+                # Filter duplikat dan waktu
+                existing = [c for c in st.session_state.monitoring_params['last_comments']
+                            if c['nickname'] == msg['nickname'] and 
+                            c['content'] == msg['content'] and
+                            (current_time - c['time']).total_seconds() < 5]
+                
+                if not existing:
+                    st.session_state.monitoring_params['last_comments'].append(msg)
+                    st.session_state.monitoring_params['chat_messages'].insert(0, {
+                        'timestamp': msg['time'].strftime("%H:%M:%S"),
+                        'user': msg['nickname'],
+                        'message': msg['content']
+                    })
+            queue.task_done()
+        except Empty:
+            break
 
-if st.session_state.chat_messages:
+# Tampilkan pesan
+if st.session_state.monitoring_params['chat_messages']:
     st.header("Live Chat Messages")
-    st.write(f"Total Pesan: {len(st.session_state.chat_messages)}")
-    st.table(st.session_state.chat_messages)
+    st.write(f"Total Pesan: {len(st.session_state.monitoring_params['chat_messages'])}")
+    st.table(st.session_state.monitoring_params['chat_messages'])
 else:
     st.info("Belum ada pesan masuk")
 
-if st.session_state.monitoring_active.is_set():
+# Tombol stop
+if st.session_state.monitoring_params['monitoring_active'].is_set():
     if st.button("Stop Monitoring"):
-        st.session_state.monitoring_active.clear()
-        st.session_state.message_queue = Queue()
-        st.session_state.chat_messages = []
-        st.session_state.last_comments = []
+        # Hentikan thread
+        st.session_state.monitoring_params['monitoring_active'].clear()
+        
+        # Bersihkan antrian
+        while not st.session_state.monitoring_params['message_queue'].empty():
+            try:
+                st.session_state.monitoring_params['message_queue'].get_nowait()
+            except Empty:
+                break
+        
+        # Reset data
+        st.session_state.monitoring_params['chat_messages'] = []
+        st.session_state.monitoring_params['last_comments'] = []
         st.experimental_rerun()
