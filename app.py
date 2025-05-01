@@ -5,15 +5,16 @@ import threading
 from datetime import datetime, timedelta
 import json
 
-# Inisialisasi session state
-if 'chat_running' not in st.session_state:
-    st.session_state.chat_running = False
-if 'last_comments' not in st.session_state:
-    st.session_state.last_comments = []
-if 'chat_messages' not in st.session_state:
-    st.session_state.chat_messages = []
-if 'etalase_data' not in st.session_state:
-    st.session_state.etalase_data = []
+# Inisialisasi session state di awal script (WAJIB DI PALING ATAS)
+for key, default in [
+    ('chat_running', False),
+    ('last_comments', []),
+    ('chat_messages', []),
+    ('etalase_data', []),
+    ('chatroom_id', None)
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 # Fungsi CookieSakti
 def cookie_sakti(input_cookie):
@@ -117,8 +118,12 @@ def check_etalase(session_id, cookie):
 
 # Fungsi untuk memproses pesan
 def process_messages():
-    while st.session_state.chat_running:
-        if 'chatroom_id' in st.session_state:
+    while True:
+        # Cek status monitoring
+        if not st.session_state.chat_running:
+            break
+            
+        if st.session_state.chatroom_id:
             messages_data = get_messages(st.session_state.chatroom_id)
             
             if messages_data and messages_data.get('code') == 0:
@@ -165,7 +170,7 @@ def process_messages():
                                     'message': content_data
                                 })
             
-            time.sleep(2)  # Jeda 2 detik
+        time.sleep(2)  # Jeda 2 detik
 
 # UI Streamlit
 st.title("Shopee Live Monitoring")
@@ -217,4 +222,5 @@ if st.session_state.chat_running:
 if st.session_state.chat_running:
     if st.button("Stop Monitoring"):
         st.session_state.chat_running = False
+        st.session_state.chatroom_id = None
         st.experimental_rerun()
