@@ -22,7 +22,7 @@ if 'last_comments' not in st.session_state:
 if 'monitoring_active' not in st.session_state:
     st.session_state.monitoring_active = False
 
-DEBUG = True
+DEBUG = False
 
 # Fungsi untuk debugging (100% thread-safe)
 def debug_log(message):
@@ -89,7 +89,6 @@ def get_chatroom_id(session_id, cookie):
         data = response.json()
         return data.get('data', {}).get('session', {}).get('chatroom_id')
     except Exception as e:
-        debug_log(f"Error get_chatroom_id: {str(e)}")
         return None
 
 # Fungsi untuk mendapatkan etalase (sudah benar)
@@ -132,7 +131,6 @@ def get_messages(chatroom_id):
         debug_log(f"Pesan diterima: {data}")  # Debug response
         return data
     except Exception as e:
-        debug_log(f"Error get_messages: {str(e)}")
         return None
 
 # Worker thread untuk ambil pesan (100% thread-safe)
@@ -174,8 +172,6 @@ def message_worker(chatroom_id):
                                 })
                     time.sleep(1.5)
                 except Exception as e:
-                    debug_log(f"Error message_worker: {str(e)}")
-                    time.sleep(5)
 
 # Fungsi pemrosesan antrian
 def process_queue():
