@@ -6,10 +6,10 @@ from datetime import datetime
 import json
 from queue import Queue, Empty
 
-# Inisialisasi session state
+# Inisialisasi session state yang benar
 if 'monitoring' not in st.session_state:
     st.session_state.monitoring = {
-        'active': False,
+        'active': threading.Event(),  # Menggunakan Event bukan boolean
         'message_queue': Queue(),
         'chat_messages': [],
         'last_comments': [],
@@ -123,11 +123,12 @@ def get_messages(chatroom_id):
         debug_log(f"Error get_messages: {str(e)}")
         return None
 
+# Perbaikan utama di worker thread
 def message_worker(chatroom_id, active_flag, msg_queue):
     debug_log("Worker thread dimulai")
     consecutive_errors = 0
     
-    while active_flag.is_set():
+    while active_flag.is_set():  # Sekarang menggunakan Event yang benar
         try:
             if not chatroom_id:
                 time.sleep(1)
@@ -170,13 +171,13 @@ def message_worker(chatroom_id, active_flag, msg_queue):
             
     debug_log("Worker thread berhenti")
 
+# Setup UI
 st.title("Shopee Live Monitoring")
 
-# Sidebar status
 status_placeholder = st.sidebar.empty()
 
 def show_status():
-    if st.session_state.monitoring['active']:
+    if st.session_state.monitoring['active'].is_set():
         status_placeholder.success(f"""
             **Status Monitoring**  
             🔴 LIVE  
@@ -191,7 +192,7 @@ cookie_input = st.text_input("Masukkan Cookie Shopee Creator:")
 process_btn = st.button("Cek Status & Mulai Monitoring")
 
 if process_btn and cookie_input:
-    if st.session_state.monitoring['active']:
+    if st.session_state.monitoring['active'].is_set():
         st.warning("Monitoring sudah berjalan!")
     else:
         processed_cookie = cookie_sakti(cookie_input.strip())
@@ -211,7 +212,7 @@ if process_btn and cookie_input:
             chatroom_id = get_chatroom_id(session_id, processed_cookie)
             if chatroom_id:
                 st.success(f"Chatroom ID: {chatroom_id}")
-                st.session_state.monitoring['active'] = True
+                st.session_state.monitoring['active'].set()  # Menggunakan Event.set()
                 
                 thread = threading.Thread(
                     target=message_worker,
@@ -272,9 +273,11 @@ if st.session_state.monitoring['chat_messages']:
 else:
     st.info("Belum ada pesan masuk")
 
-if st.session_state.monitoring['active']:
+if st.session_state.monitoring['active'].is_set():
     if st.button("Stop Monitoring"):
-        st.session_state.monitoring['active'] = False
+        st.session_state.monitoring['active'].clear()  # Menggunakan Event.clear()
         st.session_state.monitoring['chat_messages'] = []
+        st.session_state.monitoring['last_comments'] = []
+        st.rerun()
         st.session_state.monitoring['last_comments'] = []
         st.rerun()
