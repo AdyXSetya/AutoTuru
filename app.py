@@ -127,42 +127,37 @@ def get_messages(chatroom_id):
         debug_log(f"Error get_messages: {str(e)}")
         return None
 
-# Worker thread untuk ambil pesan (100% thread-safe)
+# Modifikasi worker thread untuk handle response baru
 def message_worker(chatroom_id):
     while monitoring_active.is_set():
         with thread_lock:
             if chatroom_id:
                 try:
-                    url = f"https://chatroom-live.shopee.co.id/api/v1/fetch/chatroom/{chatroom_id}/message"
-                    headers = {
-                        "User-Agent": "Android app Shopee appver=29552 app_type=1 Cronet/102.0.5005.61"
-                    }
-                    response = requests.get(url, headers=headers)
-                    messages_data = response.json()
+                    messages_data = get_messages(chatroom_id)
                     
-                    if messages_data.get('code') == 0:
-                        messages = messages_data.get('data', {}).get('message', [])
-                        for message_group in messages:
-                            for msg in message_group.get('msgs', []):
-                                nickname = msg.get('nickname', 'Unknown')
-                                content = msg.get('content', '')
-                                
-                                # Parsing konten khusus
-                                if content.startswith('{'):
-                                    try:
-                                        content_data = json.loads(content).get('content', '')
-                                    except:
-                                        content_data = content
-                                else:
+                    if messages_data and messages_data.get('code') == 0:
+                        # Handle format data baru
+                        messages = messages_data.get('data', {}).get('messages', [])
+                        for msg in messages:
+                            nickname = msg.get('sender', {}).get('nickname', 'Unknown')
+                            content = msg.get('content', '')
+                            
+                            # Parsing konten khusus
+                            if content.startswith('{'):
+                                try:
+                                    content_data = json.loads(content).get('content', '')
+                                except:
                                     content_data = content
-                                
-                                message_queue.put({
-                                    'type': 'chat',
-                                    'nickname': nickname,
-                                    'content': content_data,
-                                    'time': datetime.now()
-                                })
-                    time.sleep(1.5)
+                            else:
+                                content_data = content
+                            
+                            message_queue.put({
+                                'type': 'chat',
+                                'nickname': nickname,
+                                'content': content_data,
+                                'time': datetime.now()
+                            })
+                    time.sleep(2)  # Jeda 2 detik untuk format baru
                 except Exception as e:
                     debug_log(f"Error message_worker: {str(e)}")
                     time.sleep(5)
