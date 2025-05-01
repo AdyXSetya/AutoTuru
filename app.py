@@ -44,7 +44,7 @@ def check_live(cookie):
             live_status = data["data"]["list"][0].get("status")
             session_id = data["data"]["list"][0].get("sessionId")
             
-            if live_status == "1":
+            if live_status == 1:
                 return session_id, "SEDANG LIVE"
             else:
                 return None, "TIDAK LIVE"
