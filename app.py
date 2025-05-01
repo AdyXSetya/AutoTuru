@@ -46,7 +46,6 @@ def check_live(cookie):
     try:
         response = requests.get(url, headers=headers)
         data = response.json()
-        debug_log(f"Response check_live: {data}")  # Debug response
         
         if data.get("code") == 0 and data.get("data", {}).get("list"):
             session_id = data["data"]["list"][0].get("sessionId")
@@ -72,7 +71,6 @@ def get_chatroom_id(session_id, cookie):
     try:
         response = requests.get(url, headers=headers)
         data = response.json()
-        debug_log(f"Chatroom ID response: {data}")  # Debug response
         return data.get('data', {}).get('session', {}).get('chatroom_id')
     except Exception as e:
         debug_log(f"Error get_chatroom_id: {str(e)}")
