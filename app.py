@@ -2,11 +2,11 @@ import streamlit as st
 import requests
 import time
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
 from queue import Queue, Empty
 
-# Inisialisasi session state
+# Inisialisasi session state yang benar
 if 'monitoring_params' not in st.session_state:
     st.session_state.monitoring_params = {
         'message_queue': Queue(),
@@ -20,13 +20,15 @@ if 'monitoring_params' not in st.session_state:
 
 DEBUG = True
 
-def debug_log(message):
+# Fungsi debug yang thread-safe
+def debug_log(message, msg_queue):
     if DEBUG:
-        st.session_state.monitoring_params['message_queue'].put({
+        msg_queue.put({
             'type': 'debug',
             'message': f"[DEBUG] {datetime.now()} - {message}"
         })
 
+# Fungsi CookieSakti
 def cookie_sakti(input_cookie):
     cookie_patch = 'SPC_F=fdecd079d2e0d109_unknown; SPC_AFTID=134e5e24-814c-420a-8d2b-332f0bcc7fc2'
     
@@ -43,6 +45,7 @@ def cookie_sakti(input_cookie):
     final_cookie.update(patch_cookie)
     return '; '.join([f"{k}={v}" for k, v in final_cookie.items()])
 
+# Cek status live
 def check_live(cookie):
     now = datetime.now().strftime("%Y-%m-%d")
     url = f"https://creator.shopee.co.id/supply/api/lm/sellercenter/liveList/v2?page=1&pageSize=1000&name=&orderBy=&sort=&timeDim=30d&endDate={now}"
@@ -69,7 +72,8 @@ def check_live(cookie):
     except Exception as e:
         return {"status": f"Error: {str(e)}"}
 
-def get_chatroom_id(session_id, cookie):
+# Dapatkan chatroom ID
+def get_chatroom_id(session_id, cookie, msg_queue):
     url = f"https://live.shopee.co.id/api/v1/session/{session_id}"
     headers = {
         "User-Agent": "Android app Shopee appver=29552 app_type=1 Cronet/102.0.5005.61",
@@ -81,10 +85,11 @@ def get_chatroom_id(session_id, cookie):
         data = response.json()
         return data.get('data', {}).get('session', {}).get('chatroom_id')
     except Exception as e:
-        debug_log(f"Error get_chatroom_id: {str(e)}")
+        debug_log(f"Error get_chatroom_id: {str(e)}", msg_queue)
         return None
 
-def check_etalase(session_id, cookie):
+# Dapatkan etalase
+def check_etalase(session_id, cookie, msg_queue):
     url = f"https://live.shopee.co.id/api/v1/session/{session_id}/host/items?limit=100&offset=0"
     headers = {
         "User-Agent": "okhttp/3.12.4 app_type=1",
@@ -108,25 +113,11 @@ def check_etalase(session_id, cookie):
         else:
             return None
     except Exception as e:
-        debug_log(f"Error check_etalase: {str(e)}")
-        return None
-    
-def get_messages(chatroom_id):
-    url = f"https://chatroom-live.shopee.co.id/api/v1/fetch/chatroom/{chatroom_id}/message"
-    headers = {
-        "User-Agent": "Android app Shopee appver=29552 app_type=1 Cronet/102.0.5005.61"
-    }
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        debug_log(f"Status Code: {response.status_code}")
-        debug_log(f"Response: {response.text}")
-        return response.json()
-    except Exception as e:
-        debug_log(f"Error get_messages: {str(e)}")
+        debug_log(f"Error check_etalase: {str(e)}", msg_queue)
         return None
 
-def get_messages(chatroom_id):
+# Ambil pesan
+def get_messages(chatroom_id, msg_queue):
     url = f"https://chatroom-live.shopee.co.id/api/v1/fetch/chatroom/{chatroom_id}/message"
     headers = {
         "User-Agent": "Android app Shopee appver=29552 app_type=1 Cronet/102.0.5005.61"
@@ -136,12 +127,12 @@ def get_messages(chatroom_id):
         response = requests.get(url, headers=headers, timeout=10)
         return response.json()
     except Exception as e:
-        debug_log(f"Error get_messages: {str(e)}")
+        debug_log(f"Error get_messages: {str(e)}", msg_queue)
         return None
 
-# Perbaikan utama di message_worker
+# Worker thread yang benar-benar terisolasi
 def message_worker(chatroom_id, active_flag, msg_queue):
-    debug_log("Worker thread dimulai")
+    debug_log("Worker thread dimulai", msg_queue)
     consecutive_errors = 0
     
     while active_flag.is_set():
@@ -150,7 +141,7 @@ def message_worker(chatroom_id, active_flag, msg_queue):
                 time.sleep(1)
                 continue
 
-            messages_data = get_messages(chatroom_id)
+            messages_data = get_messages(chatroom_id, msg_queue)
             
             if messages_data and messages_data.get('code') == 0:
                 consecutive_errors = 0
@@ -160,7 +151,6 @@ def message_worker(chatroom_id, active_flag, msg_queue):
                     nickname = msg.get('sender', {}).get('nickname', 'Unknown')
                     content = msg.get('content', '')
                     
-                    # Parsing pesan khusus
                     if content.startswith('{'):
                         try:
                             content = json.loads(content).get('content', '')
@@ -175,20 +165,18 @@ def message_worker(chatroom_id, active_flag, msg_queue):
                     })
             else:
                 consecutive_errors += 1
-                debug_log(f"Respons tidak valid: {messages_data}")
                 if consecutive_errors > 5:
                     active_flag.clear()
                     break
 
-            # Jeda 1 detik (disesuaikan dengan rate limit)
-            time.sleep(1) 
+            time.sleep(1)
 
         except Exception as e:
             consecutive_errors += 1
-            debug_log(f"Error kritis: {str(e)}")
+            debug_log(f"Error kritis: {str(e)}", msg_queue)
             time.sleep(5)
             
-    debug_log("Worker thread berhenti")
+    debug_log("Worker thread berhenti", msg_queue)
 
 # Proses antrian di main thread
 def process_messages():
@@ -205,7 +193,6 @@ def process_messages():
                     'message': msg['message']
                 })
             elif msg['type'] == 'chat':
-                # Filter duplikat
                 is_duplicate = any(
                     c['nickname'] == msg['nickname'] and
                     c['content'] == msg['content'] and
@@ -227,9 +214,9 @@ def process_messages():
 # Setup UI
 st.title("Shopee Live Monitoring")
 
-# Tambahkan status di sidebar
+# Status di sidebar
 if st.session_state.monitoring_params['monitoring_active'].is_set():
-    st.sidebar.markdown(f"""
+    st.sidebar.success(f"""
         **Status Monitoring**  
         🔴 LIVE  
         Update terakhir: {st.session_state.monitoring_params['last_update'].strftime('%H:%M:%S')}
@@ -241,7 +228,6 @@ cookie_input = st.text_input("Masukkan Cookie Shopee Creator:")
 process_btn = st.button("Cek Status & Mulai Monitoring")
 
 if process_btn and cookie_input:
-    # Reset jika sudah running
     if st.session_state.monitoring_params['monitoring_active'].is_set():
         st.warning("Monitoring sudah berjalan!")
     else:
@@ -252,7 +238,7 @@ if process_btn and cookie_input:
             session_id = live_check.get("session_id")
             st.success(f"SEDANG LIVE - Session ID: {session_id}")
             
-            etalase_data = check_etalase(session_id, processed_cookie)
+            etalase_data = check_etalase(session_id, processed_cookie, st.session_state.monitoring_params['message_queue'])
             if etalase_data:
                 st.session_state.monitoring_params['etalase_data'] = etalase_data
                 st.write(f"Total Produk di Etalase: {len(etalase_data)}")
@@ -260,12 +246,11 @@ if process_btn and cookie_input:
             else:
                 st.warning("Tidak ada data etalase")
             
-            chatroom_id = get_chatroom_id(session_id, processed_cookie)
+            chatroom_id = get_chatroom_id(session_id, processed_cookie, st.session_state.monitoring_params['message_queue'])
             if chatroom_id:
                 st.success(f"Chatroom ID: {chatroom_id}")
                 st.session_state.monitoring_params['monitoring_active'].set()
                 
-                # Jalankan thread
                 thread = threading.Thread(
                     target=message_worker,
                     args=(chatroom_id,
@@ -276,22 +261,17 @@ if process_btn and cookie_input:
                 thread.start()
                 st.session_state.monitoring_params['monitoring_thread'] = thread
                 st.info("Monitoring dimulai...")
+                debug_log("Monitoring dimulai", st.session_state.monitoring_params['message_queue'])
             else:
                 st.error("Gagal mendapatkan chatroom ID")
         else:
             st.error(live_check.get("status"))
 
-# Proses antrian setiap 1 detik
-while True:
-    process_messages()
-    time.sleep(1)
-    st.session_state.monitoring_params['last_update'] = datetime.now()
-    if st.session_state.monitoring_params['monitoring_active'].is_set():
-        st.experimental_rerun()
+# Pemrosesan antrian dan UI update
+process_messages()
 
-# Tampilkan pesan
-st.header("Live Chat Messages")
 if st.session_state.monitoring_params['chat_messages']:
+    st.header("Live Chat Messages")
     st.write(f"Total Pesan: {len(st.session_state.monitoring_params['chat_messages'])}")
     st.table(st.session_state.monitoring_params['chat_messages'])
 else:
@@ -302,15 +282,12 @@ if st.session_state.monitoring_params['monitoring_active'].is_set():
     if st.button("Stop Monitoring"):
         st.session_state.monitoring_params['monitoring_active'].clear()
         
-        # Bersihkan antrian
         while not st.session_state.monitoring_params['message_queue'].empty():
             try:
                 st.session_state.monitoring_params['message_queue'].get_nowait()
             except Empty:
                 break
         
-        # Reset data
         st.session_state.monitoring_params['chat_messages'] = []
         st.session_state.monitoring_params['last_comments'] = []
-        st.experimental_rerun()
-        st.experimental_rerun()
+        st.rerun()
