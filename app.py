@@ -172,6 +172,8 @@ def message_worker(chatroom_id):
                                 })
                     time.sleep(1.5)
                 except Exception as e:
+                    debug_log(f"Error message_worker: {str(e)}")
+                    time.sleep(2)
 
 # Fungsi pemrosesan antrian
 def process_queue():
