@@ -6,7 +6,6 @@ from datetime import datetime
 def cookie_sakti(input_cookie):
     cookie_patch = 'SPC_F=fdecd079d2e0d109_unknown; SPC_AFTID=134e5e24-814c-420a-8d2b-332f0bcc7fc2'
     
-    # Parsing cookie
     def parse_cookie(cookie_str):
         items = {}
         for part in cookie_str.split(';'):
@@ -15,20 +14,17 @@ def cookie_sakti(input_cookie):
                 items[key.strip()] = value.strip()
         return items
 
-    # Gabungkan cookie
-    final_cookie = {}
-    for key, value in parse_cookie(cookie_patch).items():
-        final_cookie[key] = value
-    for key, value in parse_cookie(input_cookie).items():
-        final_cookie[key] = value
-
-    # Format kembali ke string
+    final_cookie = parse_cookie(cookie_patch)
+    input_cookies = parse_cookie(input_cookie)
+    final_cookie.update(input_cookies)
+    
     return '; '.join([f"{k}={v}" for k, v in final_cookie.items()])
 
-# Fungsi Check_Live (diperbarui untuk menyimpan session_id)
-def check_live(cookie):
+# Fungsi Check Live + Etalase
+def check_live_and_etalase(cookie):
+    # Cek status live
     now = datetime.now().strftime("%Y-%m-%d")
-    url = f"https://creator.shopee.co.id/supply/api/lm/sellercenter/liveList/v2?page=1&pageSize=1000&name=&orderBy=&sort=&timeDim=30d&endDate={now}"
+    live_url = f"https://creator.shopee.co.id/supply/api/lm/sellercenter/liveList/v2?page=1&pageSize=1000&name=&orderBy=&sort=&timeDim=30d&endDate={now}"
     
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Beeshop locale=id version=33319 appver=33319 rnver=1725276035 shopee_rn_bundle_version=6028011 Shopee language=id app_type=1 platform=web_ios os_ver=17.6.1",
@@ -36,92 +32,67 @@ def check_live(cookie):
     }
     
     try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        data = response.json()
+        # Request data live
+        live_response = requests.get(live_url, headers=headers)
+        live_data = live_response.json()
         
-        if data.get("code") == 0 and data.get("data", {}).get("list"):
-            live_status = data["data"]["list"][0].get("status")
-            session_id = data["data"]["list"][0].get("sessionId")
+        if live_data.get("code") != 0 or not live_data.get("data", {}).get("list"):
+            return {"status": "Gagal mendapatkan data live", "etalase": None}
             
-            if live_status == 1:
-                return session_id, "SEDANG LIVE"
-            else:
-                return None, "TIDAK LIVE"
-        else:
-            return None, "Gagal mendapatkan data"
-            
-    except requests.exceptions.RequestException as e:
-        return None, f"Error koneksi: {str(e)}"
-    except (KeyError, IndexError, ValueError) as e:
-        return None, f"Error parsing data: {str(e)}"
-
-# Fungsi Check_Etalase
-def check_etalase(session_id, cookie_sakti):
-    url = f"https://live.shopee.co.id/api/v1/session/{session_id}/host/items?limit=100&offset=0"
-    headers = {
-        "User-Agent": "okhttp/3.12.4 app_type=1",
-        "Cookie": cookie_sakti
-    }
-    
-    try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        data = response.json()
+        session_id = live_data["data"]["list"][0].get("sessionId")
+        live_status = live_data["data"]["list"][0].get("status")
         
-        if data.get("err_code") == 0 and data.get("data", {}).get("items"):
-            items = []
-            for idx, item in enumerate(data["data"]["items"], 1):
-                items.append({
-                    "no": idx,
-                    "item_id": item.get("item_id"),
-                    "shop_id": item.get("shop_id"),
-                    "name": item.get("name", "").replace("|", "").replace("\n", "")
-                })
-            return items
-        else:
-            return None
-    except requests.exceptions.RequestException as e:
-        return f"Error koneksi: {str(e)}"
-    except (KeyError, ValueError) as e:
-        return f"Error parsing data: {str(e)}"
+        if live_status != "1":
+            return {"status": "TIDAK LIVE", "etalase": None}
+            
+        # Request data etalase
+        etalase_url = f"https://live.shopee.co.id/api/v1/session/{session_id}/host/items?limit=100&offset=0"
+        etalase_headers = {
+            "User-Agent": "okhttp/3.12.4 app_type=1",
+            "Cookie": cookie
+        }
+        
+        etalase_response = requests.get(etalase_url, headers=etalase_headers)
+        etalase_data = etalase_response.json()
+        
+        if etalase_data.get("err_code") != 0 or not etalase_data.get("data", {}).get("items"):
+            return {"status": "SEDANG LIVE", "etalase": "Tidak ada data etalase"}
+            
+        items = []
+        for idx, item in enumerate(etalase_data["data"]["items"], 1):
+            items.append({
+                "no": idx,
+                "item_id": item.get("item_id"),
+                "shop_id": item.get("shop_id"),
+                "name": item.get("name", "").replace("|", "").replace("\n", "")
+            })
+            
+        return {"status": "SEDANG LIVE", "etalase": items}
+        
+    except Exception as e:
+        return {"status": f"Error: {str(e)}", "etalase": None}
 
 # UI Streamlit
 st.title("Shopee Live & Etalase Checker")
 
 cookie_input = st.text_input("Masukkan Cookie Shopee Creator:")
-check_live_btn = st.button("Cek Status Live")
+process_btn = st.button("Cek Status & Ambil Data Etalase")
 
-if 'session_id' not in st.session_state:
-    st.session_state.session_id = None
-
-if check_live_btn and cookie_input:
+if process_btn and cookie_input:
     with st.spinner("Memproses..."):
-        # Proses cookie sakti
         processed_cookie = cookie_sakti(cookie_input.strip())
-        # Cek status live
-        session_id, status = check_live(processed_cookie)
-        st.session_state.session_id = session_id
+        result = check_live_and_etalase(processed_cookie)
         
-        if session_id:
-            st.success(f"Status: {status}")
-            st.write(f"Session ID: `{session_id}`")
-        else:
-            st.error(f"Status: {status}")
-
-# Bagian Etalase
-if st.session_state.session_id:
-    st.header("Cek Etalase")
-    check_etalase_btn = st.button("Ambil Data Etalase")
-    
-    if check_etalase_btn:
-        with st.spinner("Mengambil data etalase..."):
-            # Proses cookie sakti lagi untuk kebutuhan API etalase
-            processed_cookie = cookie_sakti(cookie_input.strip())
-            etalase_data = check_etalase(st.session_state.session_id, processed_cookie)
-            
-            if isinstance(etalase_data, list):
-                st.write(f"Total Produk: {len(etalase_data)}")
-                st.dataframe(etalase_data)
+    # Tampilkan hasil
+    if "status" in result:
+        if result["status"] == "SEDANG LIVE":
+            st.success("Status: SEDANG LIVE")
+            if isinstance(result["etalase"], list):
+                st.write(f"Total Produk: {len(result['etalase'])}")
+                st.dataframe(result["etalase"])
             else:
-                st.error("Gagal mendapatkan data etalase")
+                st.warning(result["etalase"])
+        else:
+            st.error(f"Status: {result['status']}")
+else:
+    st.info("Masukkan cookie dan klik tombol untuk memulai")
