@@ -91,12 +91,22 @@ def get_chatroom_id(session_id, cookie):
 # WORKER THREAD
 # ================================
 def message_worker(chatroom_id):
-    """Thread untuk memantau pesan secara real-time"""
     debug_log("Worker thread dimulai")
     consecutive_errors = 0
     
-    while st.session_state.monitoring['active']:
+    while True:
         try:
+            # Pengecekan session state yang lebih aman
+            if 'monitoring' not in st.session_state:
+                time.sleep(1)
+                continue
+                
+            monitoring_state = st.session_state.monitoring
+                
+            if not monitoring_state.get('active', False):
+                time.sleep(1)
+                continue
+                
             if not chatroom_id:
                 time.sleep(1)
                 continue
