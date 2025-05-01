@@ -6,7 +6,8 @@ from datetime import datetime, timedelta
 import json
 from queue import Queue, Empty
 
-# Inisialisasi lock sebagai variabel global (bukan di session state)
+# Variabel global untuk kontrol thread
+monitoring_active = threading.Event()
 thread_lock = threading.Lock()
 
 # Inisialisasi session state di awal
@@ -18,11 +19,8 @@ if 'chat_messages' not in st.session_state:
     
 if 'last_comments' not in st.session_state:
     st.session_state.last_comments = []
-    
-if 'monitoring_active' not in st.session_state:
-    st.session_state.monitoring_active = False
 
-DEBUG = False
+DEBUG = True
 
 # Fungsi untuk debugging (100% thread-safe)
 def debug_log(message):
@@ -31,6 +29,7 @@ def debug_log(message):
             'type': 'debug',
             'message': f"[DEBUG] {datetime.now()} - {message}"
         })
+
 
 # Fungsi CookieSakti
 def cookie_sakti(input_cookie):
@@ -135,10 +134,8 @@ def get_messages(chatroom_id):
 
 # Worker thread untuk ambil pesan (100% thread-safe)
 def message_worker(chatroom_id):
-    global thread_lock  # Gunakan lock global
-    
-    while st.session_state.monitoring_active:
-        with thread_lock:  # Gunakan lock untuk thread safety
+    while monitoring_active.is_set():
+        with thread_lock:
             if chatroom_id:
                 try:
                     url = f"https://chatroom-live.shopee.co.id/api/v1/fetch/chatroom/{chatroom_id}/message"
@@ -173,7 +170,7 @@ def message_worker(chatroom_id):
                     time.sleep(1.5)
                 except Exception as e:
                     debug_log(f"Error message_worker: {str(e)}")
-                    time.sleep(2)
+                    time.sleep(5)
 
 # Fungsi pemrosesan antrian
 def process_queue():
@@ -222,7 +219,7 @@ st.title("Shopee Live Monitoring")
 cookie_input = st.text_input("Masukkan Cookie Shopee Creator:")
 process_btn = st.button("Cek Status & Mulai Monitoring")
 
-if process_btn and cookie_input and not st.session_state.monitoring_active:
+if process_btn and cookie_input and not monitoring_active.is_set():
     with st.spinner("Memproses..."):
         processed_cookie = cookie_sakti(cookie_input.strip())
         live_check = check_live(processed_cookie)
@@ -243,8 +240,8 @@ if process_btn and cookie_input and not st.session_state.monitoring_active:
         # Dapatkan chatroom ID
         chatroom_id = get_chatroom_id(session_id, processed_cookie)
         if chatroom_id:
-            # Reset state
-            st.session_state.monitoring_active = True
+            # Aktifkan monitoring
+            monitoring_active.set()
             
             # Inisialisasi thread baru
             thread = threading.Thread(
@@ -252,7 +249,6 @@ if process_btn and cookie_input and not st.session_state.monitoring_active:
                 args=(chatroom_id,),
                 daemon=True
             )
-            st.session_state.thread = thread
             thread.start()
             st.info("Monitoring dimulai...")
         else:
@@ -272,7 +268,7 @@ else:
     st.info("Belum ada pesan masuk")
 
 # Tombol stop
-if st.session_state.monitoring_active:
+if monitoring_active.is_set():
     if st.button("Stop Monitoring"):
-        st.session_state.monitoring_active = False
+        monitoring_active.clear()
         st.experimental_rerun()
