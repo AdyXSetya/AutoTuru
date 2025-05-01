@@ -6,18 +6,22 @@ from datetime import datetime
 import json
 from queue import Queue, Empty
 
-DEBUG = True
+# Inisialisasi session state
+if 'monitoring' not in st.session_state:
+    st.session_state.monitoring = {
+        'active': False,
+        'message_queue': Queue(),
+        'chat_messages': [],
+        'last_comments': [],
+        'last_update': datetime.now(),
+        'thread': None
+    }
 
-message_queue = Queue()
-monitoring_active = threading.Event()
-chat_messages = []
-last_comments = []
-etalase_data = []
-last_update = datetime.now()
+DEBUG = True
 
 def debug_log(message):
     if DEBUG:
-        message_queue.put({
+        st.session_state.monitoring['message_queue'].put({
             'type': 'debug',
             'message': f"[DEBUG] {datetime.now()} - {message}"
         })
@@ -168,14 +172,15 @@ def message_worker(chatroom_id, active_flag, msg_queue):
 
 st.title("Shopee Live Monitoring")
 
+# Sidebar status
 status_placeholder = st.sidebar.empty()
 
 def show_status():
-    if monitoring_active.is_set():
+    if st.session_state.monitoring['active']:
         status_placeholder.success(f"""
             **Status Monitoring**  
             🔴 LIVE  
-            Update terakhir: {last_update.strftime('%H:%M:%S')}
+            Update terakhir: {st.session_state.monitoring['last_update'].strftime('%H:%M:%S')}
         """)
     else:
         status_placeholder.warning("Monitoring tidak aktif")
@@ -186,7 +191,7 @@ cookie_input = st.text_input("Masukkan Cookie Shopee Creator:")
 process_btn = st.button("Cek Status & Mulai Monitoring")
 
 if process_btn and cookie_input:
-    if monitoring_active.is_set():
+    if st.session_state.monitoring['active']:
         st.warning("Monitoring sudah berjalan!")
     else:
         processed_cookie = cookie_sakti(cookie_input.strip())
@@ -206,14 +211,17 @@ if process_btn and cookie_input:
             chatroom_id = get_chatroom_id(session_id, processed_cookie)
             if chatroom_id:
                 st.success(f"Chatroom ID: {chatroom_id}")
-                monitoring_active.set()
+                st.session_state.monitoring['active'] = True
                 
                 thread = threading.Thread(
                     target=message_worker,
-                    args=(chatroom_id, monitoring_active, message_queue),
+                    args=(chatroom_id,
+                          st.session_state.monitoring['active'],
+                          st.session_state.monitoring['message_queue']),
                     daemon=True
                 )
                 thread.start()
+                st.session_state.monitoring['thread'] = thread
                 st.info("Monitoring dimulai...")
                 debug_log("Monitoring dimulai")
             else:
@@ -223,15 +231,13 @@ if process_btn and cookie_input:
         show_status()
 
 def process_queue():
-    global chat_messages, last_comments, last_update
-    
     current_time = datetime.now()
     
     while True:
         try:
-            msg = message_queue.get_nowait()
+            msg = st.session_state.monitoring['message_queue'].get_nowait()
             if msg['type'] == 'debug':
-                chat_messages.insert(0, {
+                st.session_state.monitoring['chat_messages'].insert(0, {
                     'timestamp': current_time.strftime("%H:%M:%S"),
                     'user': 'SYSTEM',
                     'message': msg['message']
@@ -241,39 +247,34 @@ def process_queue():
                     c['nickname'] == msg['nickname'] and
                     c['content'] == msg['content'] and
                     (current_time - c['time']).total_seconds() < 5
-                    for c in last_comments
+                    for c in st.session_state.monitoring['last_comments']
                 )
                 
                 if not is_duplicate:
-                    last_comments.append(msg)
-                    chat_messages.insert(0, {
+                    st.session_state.monitoring['last_comments'].append(msg)
+                    st.session_state.monitoring['chat_messages'].insert(0, {
                         'timestamp': msg['time'].strftime("%H:%M:%S"),
                         'user': msg['nickname'],
                         'message': msg['content']
                     })
-            message_queue.task_done()
+            st.session_state.monitoring['message_queue'].task_done()
         except Empty:
             break
     
-    last_update = current_time
+    st.session_state.monitoring['last_update'] = current_time
 
 process_queue()
 
-if monitoring_active.is_set():
-    show_status()
-    time.sleep(1)
-    st.rerun()
-
 st.header("Live Chat Messages")
-if chat_messages:
-    st.write(f"Total Pesan: {len(chat_messages)}")
-    st.table(chat_messages)
+if st.session_state.monitoring['chat_messages']:
+    st.write(f"Total Pesan: {len(st.session_state.monitoring['chat_messages'])}")
+    st.table(st.session_state.monitoring['chat_messages'])
 else:
     st.info("Belum ada pesan masuk")
 
-if monitoring_active.is_set():
+if st.session_state.monitoring['active']:
     if st.button("Stop Monitoring"):
-        monitoring_active.clear()
-        chat_messages.clear()
-        last_comments.clear()
+        st.session_state.monitoring['active'] = False
+        st.session_state.monitoring['chat_messages'] = []
+        st.session_state.monitoring['last_comments'] = []
         st.rerun()
