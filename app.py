@@ -110,7 +110,7 @@ def check_etalase(session_id, cookie):
             return None
     except:
         return None
-
+    
 # Fungsi untuk mendapatkan pesan
 def get_messages(chatroom_id):
     url = f"https://chatroom-live.shopee.co.id/api/v1/fetch/chatroom/{chatroom_id}/message"
@@ -119,11 +119,12 @@ def get_messages(chatroom_id):
     }
     
     try:
-        response = requests.get(url, headers=headers)
-        data = response.json()
-        debug_log(f"Pesan diterima: {data}")  # Debug response
-        return data
+        response = requests.get(url, headers=headers, timeout=10)
+        debug_log(f"Status Code: {response.status_code}")
+        debug_log(f"Response: {response.text}")
+        return response.json()
     except Exception as e:
+        debug_log(f"Error get_messages: {str(e)}")
         return None
 
 # Worker thread untuk ambil pesan (100% thread-safe)
