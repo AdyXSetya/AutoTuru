@@ -6,26 +6,20 @@ from datetime import datetime, timedelta
 import json
 from queue import Queue, Empty
 
-# Variabel global untuk kontrol thread
+# Variabel global thread-safe
+message_queue = Queue()
 monitoring_active = threading.Event()
 thread_lock = threading.Lock()
-
-# Inisialisasi session state di awal
-if 'message_queue' not in st.session_state:
-    st.session_state.message_queue = Queue()
-    
-if 'chat_messages' not in st.session_state:
-    st.session_state.chat_messages = []
-    
-if 'last_comments' not in st.session_state:
-    st.session_state.last_comments = []
+chat_messages = []
+last_comments = []
+etalase_data = []
 
 DEBUG = True
 
 # Fungsi untuk debugging (100% thread-safe)
 def debug_log(message):
     if DEBUG:
-        st.session_state.message_queue.put({
+        message_queue.put({
             'type': 'debug',
             'message': f"[DEBUG] {datetime.now()} - {message}"
         })
@@ -161,7 +155,7 @@ def message_worker(chatroom_id):
                                 else:
                                     content_data = content
                                 
-                                st.session_state.message_queue.put({
+                                message_queue.put({
                                     'type': 'chat',
                                     'nickname': nickname,
                                     'content': content_data,
@@ -174,30 +168,32 @@ def message_worker(chatroom_id):
 
 # Fungsi pemrosesan antrian
 def process_queue():
+    global chat_messages, last_comments
+    
     while True:
         try:
-            msg = st.session_state.message_queue.get_nowait()
+            msg = message_queue.get_nowait()
         except Empty:
             break
         
+        current_time = datetime.now()
+        
         if msg['type'] == 'debug':
-            st.session_state.chat_messages.insert(0, {
-                'timestamp': datetime.now().strftime("%H:%M:%S"),
+            chat_messages.insert(0, {
+                'timestamp': current_time.strftime("%H:%M:%S"),
                 'user': 'SYSTEM',
                 'message': msg['message']
             })
         elif msg['type'] == 'chat':
-            current_time = msg['time']
-            
             # Hapus komentar yang lebih dari 30 detik
-            st.session_state.last_comments = [
-                c for c in st.session_state.last_comments 
+            last_comments = [
+                c for c in last_comments 
                 if current_time - c['time'] <= timedelta(seconds=30)
             ]
             
             # Cek duplikat dengan toleransi 5 detik
             is_duplicate = False
-            for comment in st.session_state.last_comments:
+            for comment in last_comments:
                 if (comment['nickname'] == msg['nickname'] and 
                     comment['content'] == msg['content'] and
                     (current_time - comment['time']).total_seconds() < 5):
@@ -205,9 +201,9 @@ def process_queue():
                     break
             
             if not is_duplicate:
-                st.session_state.last_comments.append(msg)
-                st.session_state.chat_messages.insert(0, {
-                    'timestamp': current_time.strftime("%H:%M:%S"),
+                last_comments.append(msg)
+                chat_messages.insert(0, {
+                    'timestamp': msg['time'].strftime("%H:%M:%S"),
                     'user': msg['nickname'],
                     'message': msg['content']
                 })
@@ -231,7 +227,6 @@ if process_btn and cookie_input and not monitoring_active.is_set():
         # Dapatkan data etalase
         etalase_data = check_etalase(session_id, processed_cookie)
         if etalase_data:
-            st.session_state.etalase_data = etalase_data
             st.write(f"Total Produk di Etalase: {len(etalase_data)}")
             st.table(etalase_data)
         else:
@@ -260,10 +255,10 @@ if process_btn and cookie_input and not monitoring_active.is_set():
 process_queue()
 
 # Tampilkan pesan
-if st.session_state.chat_messages:
+if chat_messages:
     st.header("Live Chat Messages")
-    st.write(f"Total Pesan: {len(st.session_state.chat_messages)}")
-    st.table(st.session_state.chat_messages)
+    st.write(f"Total Pesan: {len(chat_messages)}")
+    st.table(chat_messages)
 else:
     st.info("Belum ada pesan masuk")
 
