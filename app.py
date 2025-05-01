@@ -4,17 +4,22 @@ import time
 import threading
 from datetime import datetime, timedelta
 import json
+from queue import Queue
 
-# Inisialisasi session state di awal script (WAJIB DI PALING ATAS)
-for key, default in [
-    ('chat_running', False),
-    ('last_comments', []),
-    ('chat_messages', []),
-    ('etalase_data', []),
-    ('chatroom_id', None)
-]:
-    if key not in st.session_state:
-        st.session_state[key] = default
+# Inisialisasi session state di awal script (WAJIB)
+if 'chat_running' not in st.session_state:
+    st.session_state.chat_running = False
+if 'last_comments' not in st.session_state:
+    st.session_state.last_comments = []
+if 'chat_messages' not in st.session_state:
+    st.session_state.chat_messages = []
+if 'etalase_data' not in st.session_state:
+    st.session_state.etalase_data = []
+if 'chatroom_id' not in st.session_state:
+    st.session_state.chatroom_id = None
+
+# Queue untuk komunikasi thread-safe
+message_queue = Queue()
 
 # Fungsi CookieSakti
 def cookie_sakti(input_cookie):
@@ -116,10 +121,8 @@ def check_etalase(session_id, cookie):
     except:
         return None
 
-# Fungsi untuk memproses pesan
 def process_messages():
     while True:
-        # Cek status monitoring
         if not st.session_state.chat_running:
             break
             
@@ -144,34 +147,53 @@ def process_messages():
                             current_time = datetime.now()
                             is_duplicate = False
                             
-                            # Hapus komentar yang lebih dari 30 detik
-                            st.session_state.last_comments = [
-                                c for c in st.session_state.last_comments 
-                                if current_time - c['time'] <= timedelta(seconds=30)
-                            ]
+                            # Format pesan untuk queue
+                            message_info = {
+                                'nickname': nickname,
+                                'content': content_data,
+                                'time': current_time
+                            }
                             
-                            for comment in st.session_state.last_comments:
-                                if (comment['nickname'] == nickname and 
-                                    comment['content'] == content_data):
-                                    is_duplicate = True
-                                    break
-                            
-                            if not is_duplicate:
-                                st.session_state.last_comments.append({
-                                    'nickname': nickname,
-                                    'content': content_data,
-                                    'time': current_time
-                                })
-                                
-                                # Simpan ke log pesan
-                                st.session_state.chat_messages.insert(0, {
-                                    'timestamp': current_time.strftime("%H:%M:%S"),
-                                    'user': nickname,
-                                    'message': content_data
-                                })
+                            # Kirim ke queue
+                            message_queue.put(message_info)
             
-        time.sleep(2)  # Jeda 2 detik
+        time.sleep(2)
 
+# Fungsi untuk mengambil pesan dari queue (MAIN THREAD)
+def process_queue():
+    while not message_queue.empty():
+        msg = message_queue.get()
+        nickname = msg['nickname']
+        content_data = msg['content']
+        current_time = msg['time']
+        
+        # Hapus komentar yang lebih dari 30 detik
+        st.session_state.last_comments = [
+            c for c in st.session_state.last_comments 
+            if current_time - c['time'] <= timedelta(seconds=30)
+        ]
+        
+        is_duplicate = any(
+            c['nickname'] == nickname and 
+            c['content'] == content_data and
+            (current_time - c['time']) <= timedelta(seconds=30)
+            for c in st.session_state.last_comments
+        )
+        
+        if not is_duplicate:
+            st.session_state.last_comments.append({
+                'nickname': nickname,
+                'content': content_data,
+                'time': current_time
+            })
+            
+            # Simpan ke log pesan
+            st.session_state.chat_messages.insert(0, {
+                'timestamp': current_time.strftime("%H:%M:%S"),
+                'user': nickname,
+                'message': content_data
+            })
+            
 # UI Streamlit
 st.title("Shopee Live Monitoring")
 
@@ -212,8 +234,9 @@ if process_btn and cookie_input:
     else:
         st.error(live_check.get("status"))
 
-# Tampilkan pesan real-time
+# Pemrosesan queue di main thread
 if st.session_state.chat_running:
+    process_queue()
     st.header("Live Chat Messages")
     st.write(f"Total Pesan: {len(st.session_state.chat_messages)}")
     st.table(st.session_state.chat_messages)
